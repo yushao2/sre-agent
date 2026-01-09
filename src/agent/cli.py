@@ -18,10 +18,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  sre-agent serve                      Start HTTP server
+  sre-agent serve --port 8080          Start on custom port
   sre-agent summarize INC-123          Summarize an incident
   sre-agent triage SUPPORT-456         Triage a support ticket
   sre-agent rca INC-123                Root cause analysis
   sre-agent chat                       Interactive chat mode
+  sre-agent demo                       Run with demo data
         """,
     )
     
@@ -37,6 +40,31 @@ Examples:
     )
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    
+    # Serve command
+    serve_parser = subparsers.add_parser("serve", help="Start HTTP server")
+    serve_parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host to bind to (default: 0.0.0.0)",
+    )
+    serve_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to bind to (default: 8000)",
+    )
+    serve_parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Enable auto-reload for development",
+    )
+    serve_parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of worker processes (default: 1)",
+    )
     
     # Summarize command
     summarize_parser = subparsers.add_parser("summarize", help="Summarize an incident")
@@ -66,7 +94,12 @@ Examples:
         parser.print_help()
         sys.exit(1)
     
-    # Check for API key
+    # Serve command doesn't need API key check upfront (server does it)
+    if args.command == "serve":
+        cmd_serve(args)
+        return
+    
+    # Check for API key for other commands
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         print("Error: ANTHROPIC_API_KEY environment variable not set")
@@ -84,6 +117,22 @@ Examples:
         asyncio.run(cmd_chat(args, api_key))
     elif args.command == "demo":
         asyncio.run(cmd_demo(args, api_key))
+
+
+def cmd_serve(args):
+    """Start the HTTP server."""
+    import uvicorn
+    
+    print(f"Starting AI SRE Agent server on {args.host}:{args.port}")
+    print(f"API docs available at http://{args.host}:{args.port}/docs")
+    
+    uvicorn.run(
+        "agent.server:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        workers=args.workers if not args.reload else 1,
+    )
 
 
 async def cmd_summarize(args, api_key: str):

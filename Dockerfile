@@ -52,8 +52,8 @@ USER agent
 
 EXPOSE 8000
 
-# Default command runs the webhook handler
-CMD ["uvicorn", "examples.webhook_handler:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default command runs the HTTP server
+CMD ["python", "-m", "agent.server"]
 
 # ============================================================================
 # MCP Server base image

@@ -8,6 +8,7 @@ from .prompts import (
     format_rca_prompt,
 )
 from .cli import main as cli_main
+from .server import app, create_app
 
 __all__ = [
     "SREAgent",
@@ -22,4 +23,6 @@ __all__ = [
     "format_triage_prompt",
     "format_rca_prompt",
     "cli_main",
+    "app",
+    "create_app",
 ]

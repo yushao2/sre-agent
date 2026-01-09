@@ -140,6 +140,91 @@ async def main():
 asyncio.run(main())
 ```
 
+## HTTP Server
+
+The agent includes a full HTTP server for webhook integrations and API access.
+
+### Start the Server
+
+```bash
+# Start server
+sre-agent serve
+
+# Custom port
+sre-agent serve --port 8080
+
+# Development mode with auto-reload
+sre-agent serve --reload
+
+# Production with multiple workers
+sre-agent serve --workers 4
+```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/api/v1/summarize` | POST | Summarize an incident (sync) |
+| `/api/v1/triage` | POST | Triage a ticket (sync) |
+| `/api/v1/rca` | POST | Root cause analysis (sync) |
+| `/api/v1/chat` | POST | Free-form chat |
+| `/api/v1/tasks/summarize` | POST | Submit async summarization |
+| `/api/v1/tasks/{task_id}` | GET | Get task status/result |
+| `/webhooks/jira` | POST | Jira webhook handler |
+| `/webhooks/pagerduty` | POST | PagerDuty webhook handler |
+| `/webhooks/generic` | POST | Generic webhook handler |
+
+### Example: Summarize via API
+
+```bash
+curl -X POST http://localhost:8000/api/v1/summarize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "incident": {
+      "key": "INC-123",
+      "summary": "Database connection pool exhausted",
+      "description": "Users experiencing timeouts",
+      "status": "investigating",
+      "priority": "critical",
+      "comments": {
+        "comments": [
+          {"author": "oncall@example.com", "body": "Investigating now"}
+        ],
+        "total": 1
+      }
+    }
+  }'
+```
+
+### Example: Chat via API
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "What are common causes of database connection pool exhaustion?",
+    "context": {"service": "api-server"}
+  }'
+```
+
+### Webhook Configuration
+
+**Jira:**
+1. Go to System → Webhooks → Create
+2. URL: `https://your-server/webhooks/jira`
+3. Events: Issue Created, Issue Updated
+
+**PagerDuty:**
+1. Go to Integrations → Generic Webhooks (v3)
+2. URL: `https://your-server/webhooks/pagerduty`
+
+### OpenAPI Documentation
+
+When the server is running, visit:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
 ## Development
 
 ### Setup dev environment
