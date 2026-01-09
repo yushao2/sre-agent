@@ -1,0 +1,81 @@
+version: "3.8"
+
+services:
+  # ==========================================================================
+  # Agent Service (webhook handler)
+  # ==========================================================================
+  agent:
+    build:
+      context: .
+      target: agent
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - JIRA_URL=${JIRA_URL}
+      - JIRA_USERNAME=${JIRA_USERNAME}
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+      - CONFLUENCE_URL=${CONFLUENCE_URL}
+      - CONFLUENCE_USERNAME=${CONFLUENCE_USERNAME}
+      - CONFLUENCE_API_TOKEN=${CONFLUENCE_API_TOKEN}
+      - GITLAB_URL=${GITLAB_URL}
+      - GITLAB_TOKEN=${GITLAB_TOKEN}
+    depends_on:
+      - mcp-jira
+      - mcp-confluence
+      - mcp-gitlab
+    volumes:
+      - agent-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ==========================================================================
+  # MCP Servers
+  # ==========================================================================
+  mcp-jira:
+    build:
+      context: .
+      target: mcp-jira
+    environment:
+      - JIRA_URL=${JIRA_URL}
+      - JIRA_USERNAME=${JIRA_USERNAME}
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+    restart: unless-stopped
+
+  mcp-confluence:
+    build:
+      context: .
+      target: mcp-confluence
+    environment:
+      - CONFLUENCE_URL=${CONFLUENCE_URL}
+      - CONFLUENCE_USERNAME=${CONFLUENCE_USERNAME}
+      - CONFLUENCE_API_TOKEN=${CONFLUENCE_API_TOKEN}
+    restart: unless-stopped
+
+  mcp-gitlab:
+    build:
+      context: .
+      target: mcp-gitlab
+    environment:
+      - GITLAB_URL=${GITLAB_URL:-https://gitlab.com}
+      - GITLAB_TOKEN=${GITLAB_TOKEN}
+    restart: unless-stopped
+
+  # ==========================================================================
+  # Supporting Services (optional, for local dev)
+  # ==========================================================================
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    restart: unless-stopped
+
+volumes:
+  agent-data:
+  chroma-data:

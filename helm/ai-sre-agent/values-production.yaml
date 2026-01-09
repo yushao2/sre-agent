@@ -1,0 +1,107 @@
+# Example production values for ai-sre-agent
+# Copy and customize this file for your environment
+
+global:
+  imageRegistry: "ghcr.io/yourorg"
+  imagePullSecrets:
+    - name: ghcr-pull-secret
+  storageClass: "standard"
+
+agent:
+  enabled: true
+  replicaCount: 2
+  
+  image:
+    repository: ai-sre-agent
+    tag: "v0.1.0"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    limits:
+      cpu: "2"
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    hosts:
+      - host: sre-agent.your-domain.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: sre-agent-tls
+        hosts:
+          - sre-agent.your-domain.com
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  
+  persistence:
+    enabled: true
+    size: 50Gi
+
+mcpServers:
+  jira:
+    enabled: true
+    replicaCount: 2
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+  
+  confluence:
+    enabled: true
+    replicaCount: 2
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+  
+  gitlab:
+    enabled: true
+    replicaCount: 2
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+
+# Use external secrets (recommended for production)
+secrets:
+  create: false
+  existingSecret: "ai-sre-agent-credentials"
+
+serviceAccount:
+  create: true
+  annotations:
+    # For AWS IRSA
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/ai-sre-agent-role
+
+networkPolicy:
+  enabled: true
+  ingressNamespaces:
+    - ingress-nginx
+  egressCIDRs:
+    - 0.0.0.0/0
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

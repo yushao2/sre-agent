@@ -1,0 +1,43 @@
+{{- if and .Values.agent.enabled .Values.agent.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "ai-sre-agent.fullname" . }}-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-sre-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+  {{- with .Values.agent.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.agent.ingress.className }}
+  ingressClassName: {{ .Values.agent.ingress.className }}
+  {{- end }}
+  {{- if .Values.agent.ingress.tls }}
+  tls:
+    {{- range .Values.agent.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.agent.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "ai-sre-agent.fullname" $ }}-agent
+                port:
+                  number: {{ $.Values.agent.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

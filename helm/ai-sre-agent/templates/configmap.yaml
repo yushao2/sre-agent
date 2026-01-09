@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-sre-agent.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-sre-agent.labels" . | nindent 4 }}
+data:
+  # Agent configuration
+  MODEL_NAME: "claude-sonnet-4-20250514"
+  EMBEDDING_MODEL: "all-MiniLM-L6-v2"
+  CHROMA_PERSIST_DIR: "/app/data/chroma"
+  
+  # MCP Server endpoints (for agent to connect to)
+  MCP_JIRA_HOST: "{{ include "ai-sre-agent.fullname" . }}-mcp-jira"
+  MCP_JIRA_PORT: "8080"
+  MCP_CONFLUENCE_HOST: "{{ include "ai-sre-agent.fullname" . }}-mcp-confluence"
+  MCP_CONFLUENCE_PORT: "8080"
+  MCP_GITLAB_HOST: "{{ include "ai-sre-agent.fullname" . }}-mcp-gitlab"
+  MCP_GITLAB_PORT: "8080"

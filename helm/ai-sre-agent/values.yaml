@@ -1,0 +1,253 @@
+# Default values for ai-sre-agent
+# This is a YAML-formatted file.
+
+# =============================================================================
+# Global settings
+# =============================================================================
+global:
+  # Image registry prefix (e.g., "ghcr.io/yourorg" or "your-registry.com")
+  imageRegistry: ""
+  # Image pull secrets
+  imagePullSecrets: []
+  # Storage class for persistent volumes
+  storageClass: ""
+
+# =============================================================================
+# Agent Configuration
+# =============================================================================
+agent:
+  enabled: true
+  
+  replicaCount: 1
+  
+  image:
+    repository: ai-sre-agent
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  
+  # Resource limits
+  resources:
+    limits:
+      cpu: "1"
+      memory: 2Gi
+    requests:
+      cpu: 250m
+      memory: 512Mi
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8000
+  
+  # Ingress configuration
+  ingress:
+    enabled: false
+    className: nginx
+    annotations: {}
+      # kubernetes.io/tls-acme: "true"
+    hosts:
+      - host: sre-agent.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+    #  - secretName: sre-agent-tls
+    #    hosts:
+    #      - sre-agent.example.com
+  
+  # Pod annotations
+  podAnnotations: {}
+  
+  # Pod security context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+  
+  # Container security context
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  
+  # Node selector
+  nodeSelector: {}
+  
+  # Tolerations
+  tolerations: []
+  
+  # Affinity rules
+  affinity: {}
+  
+  # Autoscaling
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+  
+  # Persistent storage for RAG data
+  persistence:
+    enabled: true
+    size: 10Gi
+    accessMode: ReadWriteOnce
+    # storageClass: "" # Uses global.storageClass if not set
+
+# =============================================================================
+# MCP Servers Configuration
+# =============================================================================
+mcpServers:
+  # Jira MCP Server
+  jira:
+    enabled: true
+    replicaCount: 1
+    
+    image:
+      repository: ai-sre-agent
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    
+    # Override command for this specific server
+    command: ["python", "-m", "mcp_servers.jira.server"]
+    
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    
+    # Service for internal communication
+    service:
+      type: ClusterIP
+      port: 8080
+    
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+  
+  # Confluence MCP Server
+  confluence:
+    enabled: true
+    replicaCount: 1
+    
+    image:
+      repository: ai-sre-agent
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    
+    command: ["python", "-m", "mcp_servers.confluence.server"]
+    
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    
+    service:
+      type: ClusterIP
+      port: 8080
+    
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+  
+  # GitLab MCP Server
+  gitlab:
+    enabled: true
+    replicaCount: 1
+    
+    image:
+      repository: ai-sre-agent
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    
+    command: ["python", "-m", "mcp_servers.gitlab.server"]
+    
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    
+    service:
+      type: ClusterIP
+      port: 8080
+    
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+
+# =============================================================================
+# Secrets Configuration
+# =============================================================================
+secrets:
+  # Option 1: Create secrets from values (for testing only!)
+  # In production, use external secrets or sealed secrets
+  create: false
+  
+  # Anthropic API key
+  anthropicApiKey: ""
+  
+  # Jira credentials
+  jira:
+    url: ""
+    username: ""
+    apiToken: ""
+  
+  # Confluence credentials
+  confluence:
+    url: ""
+    username: ""
+    apiToken: ""
+  
+  # GitLab credentials
+  gitlab:
+    url: "https://gitlab.com"
+    token: ""
+
+  # Option 2: Use existing secret
+  existingSecret: ""
+  # Keys in existing secret:
+  # - ANTHROPIC_API_KEY
+  # - JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN
+  # - CONFLUENCE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN
+  # - GITLAB_URL, GITLAB_TOKEN
+
+# =============================================================================
+# Service Account
+# =============================================================================
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# =============================================================================
+# Network Policies
+# =============================================================================
+networkPolicy:
+  enabled: false
+  # Allow ingress from these namespaces
+  ingressNamespaces: []
+  # Allow egress to these CIDRs (for external APIs)
+  egressCIDRs:
+    - 0.0.0.0/0
+
+# =============================================================================
+# Pod Disruption Budget
+# =============================================================================
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1

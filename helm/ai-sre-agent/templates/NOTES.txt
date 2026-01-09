@@ -1,0 +1,78 @@
+🚀 AI SRE Agent has been deployed!
+
+{{- if .Values.agent.enabled }}
+
+📡 Agent Webhook Endpoint:
+{{- if .Values.agent.ingress.enabled }}
+{{- range $host := .Values.agent.ingress.hosts }}
+  http{{ if $.Values.agent.ingress.tls }}s{{ end }}://{{ $host.host }}{{ (first $host.paths).path }}
+{{- end }}
+{{- else if contains "NodePort" .Values.agent.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "ai-sre-agent.fullname" . }}-agent)
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.agent.service.type }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+  You can watch the status by running:
+    kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "ai-sre-agent.fullname" . }}-agent
+{{- else if contains "ClusterIP" .Values.agent.service.type }}
+  kubectl port-forward --namespace {{ .Release.Namespace }} svc/{{ include "ai-sre-agent.fullname" . }}-agent {{ .Values.agent.service.port }}:{{ .Values.agent.service.port }}
+  echo "Visit http://127.0.0.1:{{ .Values.agent.service.port }}"
+{{- end }}
+{{- end }}
+
+🔧 MCP Servers Deployed:
+{{- if .Values.mcpServers.jira.enabled }}
+  ✅ Jira MCP Server: {{ include "ai-sre-agent.fullname" . }}-mcp-jira:{{ .Values.mcpServers.jira.service.port }}
+{{- end }}
+{{- if .Values.mcpServers.confluence.enabled }}
+  ✅ Confluence MCP Server: {{ include "ai-sre-agent.fullname" . }}-mcp-confluence:{{ .Values.mcpServers.confluence.service.port }}
+{{- end }}
+{{- if .Values.mcpServers.gitlab.enabled }}
+  ✅ GitLab MCP Server: {{ include "ai-sre-agent.fullname" . }}-mcp-gitlab:{{ .Values.mcpServers.gitlab.service.port }}
+{{- end }}
+
+📋 Quick Commands:
+
+  # Check pod status
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+  # View agent logs
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=agent -f
+
+  # View MCP server logs
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=mcp-server -f
+
+  # Test the health endpoint
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "ai-sre-agent.fullname" . }}-agent 8000:{{ .Values.agent.service.port }}
+  curl http://localhost:8000/health
+
+{{- if not .Values.secrets.existingSecret }}
+{{- if not .Values.secrets.create }}
+
+⚠️  IMPORTANT: You need to create a secret with your API credentials!
+
+Create a secret with the following keys:
+  - ANTHROPIC_API_KEY
+  - JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN
+  - CONFLUENCE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN
+  - GITLAB_URL, GITLAB_TOKEN
+
+Example:
+  kubectl create secret generic {{ include "ai-sre-agent.fullname" . }}-secrets \
+    --namespace {{ .Release.Namespace }} \
+    --from-literal=ANTHROPIC_API_KEY=your-key \
+    --from-literal=JIRA_URL=https://your-company.atlassian.net \
+    --from-literal=JIRA_USERNAME=your-email@company.com \
+    --from-literal=JIRA_API_TOKEN=your-jira-token \
+    --from-literal=CONFLUENCE_URL=https://your-company.atlassian.net/wiki \
+    --from-literal=CONFLUENCE_USERNAME=your-email@company.com \
+    --from-literal=CONFLUENCE_API_TOKEN=your-confluence-token \
+    --from-literal=GITLAB_URL=https://gitlab.com \
+    --from-literal=GITLAB_TOKEN=your-gitlab-token
+
+Or set secrets.existingSecret in your values.yaml to use an existing secret.
+{{- end }}
+{{- end }}
+
+📚 Documentation: https://github.com/yourorg/ai-sre-agent

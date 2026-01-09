@@ -233,3 +233,152 @@ Add new prompts in `agent/prompts.py` for different use cases.
 ## License
 
 MIT
+
+---
+
+## Docker
+
+### Build Images
+
+```bash
+# Build all images
+make build
+
+# Or build individually
+docker build -t ai-sre-agent:latest --target agent .
+docker build -t ai-sre-agent-mcp-jira:latest --target mcp-jira .
+docker build -t ai-sre-agent-mcp-confluence:latest --target mcp-confluence .
+docker build -t ai-sre-agent-mcp-gitlab:latest --target mcp-gitlab .
+```
+
+### Run with Docker Compose
+
+```bash
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with your credentials
+
+# Start all services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop
+docker-compose down
+```
+
+## Kubernetes Deployment (Helm)
+
+The Helm chart deploys each MCP server as a separate deployment in the same namespace.
+
+### Prerequisites
+
+- Kubernetes 1.24+
+- Helm 3.x
+- A secret with your API credentials
+
+### Quick Start
+
+```bash
+# Create namespace
+kubectl create namespace ai-sre-agent
+
+# Create secret with credentials
+kubectl create secret generic ai-sre-agent-credentials \
+  --namespace ai-sre-agent \
+  --from-literal=ANTHROPIC_API_KEY=your-key \
+  --from-literal=JIRA_URL=https://your-company.atlassian.net \
+  --from-literal=JIRA_USERNAME=your-email@company.com \
+  --from-literal=JIRA_API_TOKEN=your-jira-token \
+  --from-literal=CONFLUENCE_URL=https://your-company.atlassian.net/wiki \
+  --from-literal=CONFLUENCE_USERNAME=your-email@company.com \
+  --from-literal=CONFLUENCE_API_TOKEN=your-confluence-token \
+  --from-literal=GITLAB_URL=https://gitlab.com \
+  --from-literal=GITLAB_TOKEN=your-gitlab-token
+
+# Install chart
+helm upgrade --install ai-sre-agent helm/ai-sre-agent \
+  --namespace ai-sre-agent \
+  --set secrets.existingSecret=ai-sre-agent-credentials
+```
+
+### Production Deployment
+
+```bash
+# Use production values
+helm upgrade --install ai-sre-agent helm/ai-sre-agent \
+  --namespace ai-sre-agent \
+  -f helm/ai-sre-agent/values-production.yaml
+```
+
+### Architecture on Kubernetes
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Namespace: ai-sre-agent                  │
+│                                                             │
+│  ┌─────────────────┐                                        │
+│  │     Ingress     │                                        │
+│  └────────┬────────┘                                        │
+│           │                                                 │
+│           ▼                                                 │
+│  ┌─────────────────┐      ┌──────────────────────────────┐ │
+│  │  Agent Service  │      │         ConfigMap            │ │
+│  │   (ClusterIP)   │      │         Secrets              │ │
+│  └────────┬────────┘      └──────────────────────────────┘ │
+│           │                                                 │
+│           ▼                                                 │
+│  ┌─────────────────┐                                        │
+│  │ Agent Deployment│──┐                                     │
+│  │  (2 replicas)   │  │                                     │
+│  └─────────────────┘  │                                     │
+│           │           │                                     │
+│           ▼           ▼                                     │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │  MCP Jira   │ │MCP Confluenc│ │ MCP GitLab  │           │
+│  │  Service    │ │   Service   │ │  Service    │           │
+│  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘           │
+│         │               │               │                   │
+│         ▼               ▼               ▼                   │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │  MCP Jira   │ │MCP Confluenc│ │ MCP GitLab  │           │
+│  │ Deployment  │ │ Deployment  │ │ Deployment  │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Helm Values
+
+Key configuration options:
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `agent.enabled` | Deploy the agent | `true` |
+| `agent.replicaCount` | Agent replicas | `1` |
+| `agent.ingress.enabled` | Enable ingress | `false` |
+| `mcpServers.jira.enabled` | Deploy Jira MCP | `true` |
+| `mcpServers.confluence.enabled` | Deploy Confluence MCP | `true` |
+| `mcpServers.gitlab.enabled` | Deploy GitLab MCP | `true` |
+| `secrets.existingSecret` | Use existing K8s secret | `""` |
+
+See `helm/ai-sre-agent/values.yaml` for all options.
+
+### Useful Commands
+
+```bash
+# Check status
+kubectl get pods -n ai-sre-agent
+
+# View agent logs
+kubectl logs -n ai-sre-agent -l app.kubernetes.io/component=agent -f
+
+# View MCP server logs
+kubectl logs -n ai-sre-agent -l app.kubernetes.io/component=mcp-server -f
+
+# Port forward for testing
+kubectl port-forward -n ai-sre-agent svc/ai-sre-agent-agent 8000:8000
+
+# Test health endpoint
+curl http://localhost:8000/health
+```
