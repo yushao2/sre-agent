@@ -8,6 +8,8 @@ Production-ready AI agent for incident management and support triage, powered by
 - **Ticket Triage**: Categorize and prioritize support tickets automatically
 - **Root Cause Analysis**: Deep-dive analysis with contributing factors and fixes
 - **Interactive Chat**: Ask SRE-related questions and get expert guidance
+- **RAG Support**: Store and retrieve similar past incidents using local ChromaDB
+- **MCP Servers**: Read-only integrations with Jira, Confluence, and GitLab
 
 ## Installation
 
@@ -34,7 +36,8 @@ pip install -e ".[all]"
 pip install -e ".[server]"      # FastAPI server
 pip install -e ".[celery]"      # Celery + Redis
 pip install -e ".[database]"    # PostgreSQL support
-pip install -e ".[mcp]"         # MCP integrations
+pip install -e ".[mcp]"         # MCP integrations (Jira, Confluence, GitLab)
+pip install -e ".[rag]"         # RAG with ChromaDB
 ```
 
 ## Quick Start
@@ -121,6 +124,173 @@ async def main():
     print(result)
 
 asyncio.run(main())
+```
+
+---
+
+## RAG: Similar Incident Search
+
+Store resolved incidents and search for similar ones during RCA.
+
+```bash
+# Install RAG dependencies
+pip install -e ".[rag]"
+```
+
+```python
+from agent import IncidentKnowledgeBase
+
+# Create knowledge base with local file storage
+# Data persists in ./data/incidents across restarts
+kb = IncidentKnowledgeBase(persist_directory="./data/incidents")
+
+# Add resolved incidents
+kb.add_incident({
+    "key": "INC-100",
+    "summary": "Database connection pool exhausted",
+    "description": "Connection leak in reporting service",
+    "root_cause": "Missing connection.close() in finally block",
+    "resolution": "Added proper connection cleanup with context manager",
+    "status": "Resolved",
+    "priority": "Critical",
+})
+
+kb.add_incident({
+    "key": "INC-101", 
+    "summary": "API timeout during peak traffic",
+    "description": "Upstream service rate limiting",
+    "root_cause": "No circuit breaker, cascading failures",
+    "resolution": "Added circuit breaker and retry with backoff",
+})
+
+# Search for similar incidents
+similar = kb.search("connection timeout errors", k=3)
+for inc in similar:
+    print(f"{inc['key']}: {inc['summary']} (score: {inc['score']:.2f})")
+    print(f"  Root cause: {inc['root_cause']}")
+
+# Use in-memory storage for testing (no persistence)
+kb_test = IncidentKnowledgeBase()  # No persist_directory
+```
+
+### Runbook Store
+
+```python
+from agent import RunbookStore
+
+store = RunbookStore(persist_directory="./data/runbooks")
+
+# Add runbooks
+store.add_runbook(
+    id="rb-db-conn",
+    title="Database Connection Pool Troubleshooting",
+    content="""
+## Symptoms
+- 504 Gateway Timeout errors
+- "Connection pool exhausted" in logs
+
+## Investigation Steps
+1. Check current pool usage: `SELECT count(*) FROM pg_stat_activity`
+2. Look for long-running queries
+3. Check for connection leaks in recent deployments
+
+## Resolution
+- Restart affected service pods
+- Kill long-running queries if safe
+- Scale up pool size temporarily
+    """,
+    tags=["database", "connection-pool", "troubleshooting"],
+)
+
+# Search runbooks
+results = store.search("connection timeout database")
+for rb in results:
+    print(f"{rb['id']}: {rb['title']}")
+```
+
+---
+
+## MCP Servers: Local Testing
+
+Test MCP servers locally before deploying.
+
+```bash
+# Install MCP dependencies
+pip install -e ".[mcp]"
+```
+
+### Test Jira MCP Server
+
+```bash
+# Set environment variables
+export JIRA_URL=https://jira.company.com
+export JIRA_USERNAME=your-username
+export JIRA_TOKEN=your-token  # or JIRA_API_TOKEN or JIRA_PASSWORD
+
+# Run tests
+python -m agent.mcp_test jira
+
+# Interactive mode
+python -m agent.mcp_test jira --interactive
+
+# Check env vars only
+python -m agent.mcp_test jira --check-only
+```
+
+### Test Confluence MCP Server
+
+```bash
+export CONFLUENCE_URL=https://confluence.company.com
+export CONFLUENCE_USERNAME=your-username
+export CONFLUENCE_TOKEN=your-token
+
+python -m agent.mcp_test confluence
+```
+
+### Test GitLab MCP Server
+
+```bash
+export GITLAB_URL=https://gitlab.company.com
+export GITLAB_TOKEN=your-pat
+
+python -m agent.mcp_test gitlab
+python -m agent.mcp_test gitlab --interactive
+```
+
+### Using Env Files
+
+```bash
+# Create .env.jira with your credentials
+echo "JIRA_URL=https://jira.company.com" > .env.jira
+echo "JIRA_USERNAME=me@company.com" >> .env.jira
+echo "JIRA_TOKEN=secret" >> .env.jira
+
+# Load and test
+python -m agent.mcp_test jira --env-file .env.jira
+```
+
+### Run MCP Server Locally (stdio mode)
+
+```bash
+# Jira server
+python -m mcp_servers.jira.server
+
+# Confluence server  
+python -m mcp_servers.confluence.server
+
+# GitLab server
+python -m mcp_servers.gitlab.server
+```
+
+### Run MCP Server (HTTP mode)
+
+```bash
+export MCP_TRANSPORT=streamable-http
+export MCP_HOST=0.0.0.0
+export MCP_PORT=8080
+
+python -m mcp_servers.jira.server
+# Server available at http://localhost:8080/mcp
 ```
 
 ---
@@ -239,15 +409,21 @@ ai-sre-agent/
 │   ├── agent.py          # Core SREAgentSimple class
 │   ├── prompts.py        # System prompts and formatters
 │   ├── local.py          # CLI and sync wrappers
+│   ├── rag.py            # RAG with ChromaDB (IncidentKnowledgeBase, RunbookStore)
+│   ├── mcp_test.py       # MCP server testing utilities
 │   ├── server.py         # FastAPI production server
 │   ├── tasks.py          # Celery task definitions
 │   └── database.py       # SQLAlchemy models
+├── src/mcp_servers/
+│   ├── jira/server.py    # Jira Data Center MCP (read-only)
+│   ├── confluence/server.py  # Confluence Data Center MCP (read-only)
+│   └── gitlab/server.py  # GitLab MCP (read-only)
 ├── examples/
 │   ├── simple_usage.py   # Python usage examples
 │   └── sample_incident.json
 ├── helm/ai-sre-agent/    # Kubernetes Helm chart
 ├── docker-compose.yml    # Local development stack
-└── Dockerfile            # Multi-stage build
+└── Dockerfile            # Multi-stage build (CentOS-based)
 ```
 
 ## Development

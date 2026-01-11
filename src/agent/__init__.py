@@ -36,6 +36,14 @@ try:
 except ImportError:
     main = None
 
+# RAG components (optional - requires chromadb)
+try:
+    from .rag import IncidentKnowledgeBase, RunbookStore, get_default_data_dir
+except ImportError:
+    IncidentKnowledgeBase = None
+    RunbookStore = None
+    get_default_data_dir = None
+
 __version__ = "0.2.0"
 
 __all__ = [
@@ -48,6 +56,10 @@ __all__ = [
     "run_triage",
     "run_rca",
     "run_chat",
+    # RAG
+    "IncidentKnowledgeBase",
+    "RunbookStore",
+    "get_default_data_dir",
     # CLI
     "main",
     # Version
