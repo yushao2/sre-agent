@@ -1,8 +1,6 @@
 """CLI entry point for the AI SRE Agent."""
 
 import argparse
-import asyncio
-import json
 import os
 import sys
 
@@ -17,73 +15,37 @@ def main():
         description="AI SRE Agent - Incident management and support triage",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Commands:
+  serve                Start the HTTP API server
+  worker               Start a Celery worker
+  beat                 Start the Celery beat scheduler
+  demo                 Run demo with sample data
+
 Examples:
-  sre-agent serve                      Start HTTP server
-  sre-agent serve --port 8080          Start on custom port
-  sre-agent summarize INC-123          Summarize an incident
-  sre-agent triage SUPPORT-456         Triage a support ticket
-  sre-agent rca INC-123                Root cause analysis
-  sre-agent chat                       Interactive chat mode
-  sre-agent demo                       Run with demo data
+  sre-agent serve --port 8000
+  sre-agent worker --concurrency 4
+  sre-agent demo
         """,
-    )
-    
-    parser.add_argument(
-        "--model",
-        default="claude-sonnet-4-20250514",
-        help="Model to use (default: claude-sonnet-4-20250514)",
-    )
-    parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Verbose output",
     )
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
     # Serve command
-    serve_parser = subparsers.add_parser("serve", help="Start HTTP server")
-    serve_parser.add_argument(
-        "--host",
-        default="0.0.0.0",
-        help="Host to bind to (default: 0.0.0.0)",
-    )
-    serve_parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="Port to bind to (default: 8000)",
-    )
-    serve_parser.add_argument(
-        "--reload",
-        action="store_true",
-        help="Enable auto-reload for development",
-    )
-    serve_parser.add_argument(
-        "--workers",
-        type=int,
-        default=1,
-        help="Number of worker processes (default: 1)",
-    )
+    serve_parser = subparsers.add_parser("serve", help="Start HTTP API server")
+    serve_parser.add_argument("--host", default="0.0.0.0", help="Host (default: 0.0.0.0)")
+    serve_parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
+    serve_parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
+    serve_parser.add_argument("--workers", type=int, default=1, help="Number of workers")
     
-    # Summarize command
-    summarize_parser = subparsers.add_parser("summarize", help="Summarize an incident")
-    summarize_parser.add_argument("incident_key", help="Incident key (e.g., INC-123)")
-    summarize_parser.add_argument(
-        "--json-file",
-        help="Path to JSON file with incident data (optional)",
-    )
+    # Worker command
+    worker_parser = subparsers.add_parser("worker", help="Start Celery worker")
+    worker_parser.add_argument("--concurrency", type=int, default=4, help="Worker concurrency")
+    worker_parser.add_argument("--queues", default="llm", help="Queues to consume")
+    worker_parser.add_argument("--loglevel", default="info", help="Log level")
     
-    # Triage command
-    triage_parser = subparsers.add_parser("triage", help="Triage a support ticket")
-    triage_parser.add_argument("ticket_key", help="Ticket key (e.g., SUPPORT-456)")
-    
-    # RCA command
-    rca_parser = subparsers.add_parser("rca", help="Root cause analysis")
-    rca_parser.add_argument("incident_key", help="Incident key")
-    
-    # Chat command
-    chat_parser = subparsers.add_parser("chat", help="Interactive chat mode")
+    # Beat command
+    beat_parser = subparsers.add_parser("beat", help="Start Celery beat scheduler")
+    beat_parser.add_argument("--loglevel", default="info", help="Log level")
     
     # Demo command
     demo_parser = subparsers.add_parser("demo", help="Run with demo data")
@@ -94,152 +56,81 @@ Examples:
         parser.print_help()
         sys.exit(1)
     
-    # Serve command doesn't need API key check upfront (server does it)
     if args.command == "serve":
-        cmd_serve(args)
-        return
-    
-    # Check for API key for other commands
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("Error: ANTHROPIC_API_KEY environment variable not set")
-        print("Set it with: export ANTHROPIC_API_KEY=your-key-here")
-        sys.exit(1)
-    
-    # Run the appropriate command
-    if args.command == "summarize":
-        asyncio.run(cmd_summarize(args, api_key))
-    elif args.command == "triage":
-        asyncio.run(cmd_triage(args, api_key))
-    elif args.command == "rca":
-        asyncio.run(cmd_rca(args, api_key))
-    elif args.command == "chat":
-        asyncio.run(cmd_chat(args, api_key))
+        run_server(args)
+    elif args.command == "worker":
+        run_worker(args)
+    elif args.command == "beat":
+        run_beat(args)
     elif args.command == "demo":
-        asyncio.run(cmd_demo(args, api_key))
+        run_demo()
 
 
-def cmd_serve(args):
-    """Start the HTTP server."""
+def run_server(args):
+    """Start the FastAPI server."""
     import uvicorn
     
-    print(f"Starting AI SRE Agent server on {args.host}:{args.port}")
-    print(f"API docs available at http://{args.host}:{args.port}/docs")
+    print(f"Starting server on {args.host}:{args.port}")
+    print(f"API docs: http://{args.host}:{args.port}/docs")
     
     uvicorn.run(
         "agent.server:app",
         host=args.host,
         port=args.port,
         reload=args.reload,
-        workers=args.workers if not args.reload else 1,
+        workers=1 if args.reload else args.workers,
     )
 
 
-async def cmd_summarize(args, api_key: str):
-    """Run incident summarization."""
-    from agent import SREAgentSimple
+def run_worker(args):
+    """Start a Celery worker."""
+    from .tasks import celery
     
-    agent = SREAgentSimple(anthropic_api_key=api_key, model_name=args.model)
+    print(f"Starting Celery worker (concurrency={args.concurrency})")
     
-    # Load incident data if provided
-    if args.json_file:
-        with open(args.json_file) as f:
-            incident_data = json.load(f)
-    else:
-        # Would fetch from Jira in real implementation
-        incident_data = {
-            "key": args.incident_key,
-            "summary": f"Incident {args.incident_key}",
-            "description": "No data provided. Use --json-file to provide incident data.",
-            "comments": {"comments": [], "total": 0},
-        }
-    
-    print(f"Analyzing incident: {args.incident_key}")
-    print("-" * 60)
-    
-    summary = await agent.summarize_incident_simple(incident_data)
-    print(summary)
+    celery.worker_main([
+        "worker",
+        f"--concurrency={args.concurrency}",
+        f"--queues={args.queues}",
+        f"--loglevel={args.loglevel}",
+    ])
 
 
-async def cmd_triage(args, api_key: str):
-    """Run ticket triage."""
-    from agent import SREAgentSimple
+def run_beat(args):
+    """Start Celery beat scheduler."""
+    from .tasks import celery
     
-    print(f"Triaging ticket: {args.ticket_key}")
-    print("(Full triage requires MCP connections - showing demo output)")
-    print("-" * 60)
-    print("Category: Support Request")
-    print("Priority: Medium")
-    print("Team: Platform")
-    print("Needs Escalation: No")
-
-
-async def cmd_rca(args, api_key: str):
-    """Run root cause analysis."""
-    from agent import SREAgentSimple
+    print("Starting Celery beat scheduler")
     
-    print(f"Running RCA for: {args.incident_key}")
-    print("(Full RCA requires MCP connections - use 'demo' command for example)")
+    celery.start([
+        "beat",
+        f"--loglevel={args.loglevel}",
+    ])
 
 
-async def cmd_chat(args, api_key: str):
-    """Run interactive chat mode."""
-    from agent import SREAgentSimple
-    
-    agent = SREAgentSimple(anthropic_api_key=api_key, model_name=args.model)
-    
-    print("AI SRE Agent - Interactive Mode")
-    print("Type 'quit' or 'exit' to stop")
-    print("-" * 60)
-    
-    while True:
-        try:
-            user_input = input("\nYou: ").strip()
-            if user_input.lower() in ("quit", "exit", "q"):
-                print("Goodbye!")
-                break
-            
-            if not user_input:
-                continue
-            
-            # Simple chat without full agent
-            from langchain_anthropic import ChatAnthropic
-            from langchain_core.messages import HumanMessage, SystemMessage
-            from agent.prompts import SRE_AGENT_SYSTEM_PROMPT
-            
-            llm = ChatAnthropic(
-                model=args.model,
-                anthropic_api_key=api_key,
-            )
-            
-            response = await llm.ainvoke([
-                SystemMessage(content=SRE_AGENT_SYSTEM_PROMPT),
-                HumanMessage(content=user_input),
-            ])
-            
-            print(f"\nAgent: {response.content}")
-            
-        except KeyboardInterrupt:
-            print("\nGoodbye!")
-            break
-
-
-async def cmd_demo(args, api_key: str):
+def run_demo():
     """Run demo with sample data."""
-    from agent import SREAgentSimple
+    import asyncio
     
-    # Sample incident data
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("Error: ANTHROPIC_API_KEY not set")
+        sys.exit(1)
+    
+    from .agent import SREAgentSimple
+    
     demo_incident = {
         "key": "INC-123",
         "summary": "Production database connection pool exhausted",
         "description": """
 ## Impact
-Users experiencing timeouts when accessing the dashboard.
+Users experiencing timeouts accessing the dashboard.
 
 ## Timeline
-- 10:30 UTC - First alerts fired
+- 10:30 UTC - Alerts fired
 - 10:35 UTC - Oncall paged
-- 10:40 UTC - Investigation started
+- 10:45 UTC - Root cause identified
+- 11:00 UTC - Resolved
         """,
         "status": "Resolved",
         "priority": "Critical",
@@ -247,35 +138,35 @@ Users experiencing timeouts when accessing the dashboard.
             "comments": [
                 {
                     "author": "oncall@example.com",
-                    "body": "Found the issue - a long-running query from the reporting service is holding connections.",
+                    "body": "Long-running query from reporting service holding connections.",
                     "created": "2024-01-15T10:50:00Z",
                 },
                 {
                     "author": "dba@example.com",
-                    "body": "Query killed. Connection pool recovering.",
-                    "created": "2024-01-15T11:05:00Z",
+                    "body": "Query killed. Pool recovering.",
+                    "created": "2024-01-15T11:00:00Z",
                 },
             ],
             "total": 2,
         },
-        "linked_issues": [
-            {"key": "DB-789", "type": "follow-up", "summary": "Add index on orders.created_at"},
-        ],
     }
     
-    print("=" * 60)
-    print("AI SRE Agent - Demo")
-    print("=" * 60)
-    print(f"\nAnalyzing demo incident: {demo_incident['key']}")
-    print(f"Summary: {demo_incident['summary']}")
-    print("\nGenerating analysis...\n")
-    print("-" * 60)
+    async def _run():
+        print("=" * 60)
+        print("AI SRE Agent Demo")
+        print("=" * 60)
+        print(f"\nIncident: {demo_incident['key']}")
+        print(f"Summary: {demo_incident['summary']}")
+        print("\nGenerating analysis...\n")
+        
+        agent = SREAgentSimple(anthropic_api_key=api_key)
+        result = await agent.summarize_incident_simple(demo_incident)
+        
+        print("-" * 60)
+        print(result)
+        print("-" * 60)
     
-    agent = SREAgentSimple(anthropic_api_key=api_key, model_name=args.model)
-    summary = await agent.summarize_incident_simple(demo_incident)
-    
-    print(summary)
-    print("-" * 60)
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":

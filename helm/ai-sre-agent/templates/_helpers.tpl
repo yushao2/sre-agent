@@ -22,7 +22,7 @@ Create a default fully qualified app name.
 {{- end }}
 
 {{/*
-Create chart name and version as used by the chart label.
+Chart label
 */}}
 {{- define "ai-sre-agent.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
@@ -34,9 +34,7 @@ Common labels
 {{- define "ai-sre-agent.labels" -}}
 helm.sh/chart: {{ include "ai-sre-agent.chart" . }}
 {{ include "ai-sre-agent.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
@@ -49,7 +47,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Create the name of the service account to use
+Service account name
 */}}
 {{- define "ai-sre-agent.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
@@ -60,7 +58,7 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
-Create the name of the secret to use
+Secret name
 */}}
 {{- define "ai-sre-agent.secretName" -}}
 {{- if .Values.secrets.existingSecret }}
@@ -71,38 +69,45 @@ Create the name of the secret to use
 {{- end }}
 
 {{/*
-Image name with registry
+Redis URL
+*/}}
+{{- define "ai-sre-agent.redisUrl" -}}
+{{- if .Values.redis.enabled }}
+{{- if .Values.redis.auth.enabled }}
+redis://:{{ .Values.redis.auth.password | default "$(REDIS_PASSWORD)" }}@{{ include "ai-sre-agent.fullname" . }}-redis-master:6379/0
+{{- else }}
+redis://{{ include "ai-sre-agent.fullname" . }}-redis-master:6379/0
+{{- end }}
+{{- else if .Values.externalRedis.url }}
+{{- .Values.externalRedis.url }}
+{{- else }}
+redis://:$(REDIS_PASSWORD)@{{ .Values.externalRedis.host }}:{{ .Values.externalRedis.port }}/0
+{{- end }}
+{{- end }}
+
+{{/*
+PostgreSQL URL
+*/}}
+{{- define "ai-sre-agent.postgresqlUrl" -}}
+{{- if .Values.postgresql.enabled }}
+postgresql://{{ .Values.postgresql.auth.username }}:$(DATABASE_PASSWORD)@{{ include "ai-sre-agent.fullname" . }}-postgresql:5432/{{ .Values.postgresql.auth.database }}
+{{- else if .Values.externalPostgresql.url }}
+{{- .Values.externalPostgresql.url }}
+{{- else }}
+postgresql://{{ .Values.externalPostgresql.username }}:$(DATABASE_PASSWORD)@{{ .Values.externalPostgresql.host }}:{{ .Values.externalPostgresql.port }}/{{ .Values.externalPostgresql.database }}
+{{- end }}
+{{- end }}
+
+{{/*
+Image with registry
 */}}
 {{- define "ai-sre-agent.image" -}}
-{{- $registry := .Values.global.imageRegistry | default "" }}
-{{- $repository := .image.repository }}
+{{- $registry := .global.imageRegistry | default "" }}
+{{- $repo := .image.repository }}
 {{- $tag := .image.tag | default "latest" }}
 {{- if $registry }}
-{{- printf "%s/%s:%s" $registry $repository $tag }}
+{{- printf "%s/%s:%s" $registry $repo $tag }}
 {{- else }}
-{{- printf "%s:%s" $repository $tag }}
+{{- printf "%s:%s" $repo $tag }}
 {{- end }}
-{{- end }}
-
-{{/*
-MCP Server labels
-*/}}
-{{- define "ai-sre-agent.mcpLabels" -}}
-helm.sh/chart: {{ include "ai-sre-agent.chart" .context }}
-app.kubernetes.io/name: {{ include "ai-sre-agent.name" .context }}-mcp-{{ .name }}
-app.kubernetes.io/instance: {{ .context.Release.Name }}
-app.kubernetes.io/component: mcp-server
-app.kubernetes.io/part-of: {{ include "ai-sre-agent.name" .context }}
-{{- if .context.Chart.AppVersion }}
-app.kubernetes.io/version: {{ .context.Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .context.Release.Service }}
-{{- end }}
-
-{{/*
-MCP Server selector labels
-*/}}
-{{- define "ai-sre-agent.mcpSelectorLabels" -}}
-app.kubernetes.io/name: {{ include "ai-sre-agent.name" .context }}-mcp-{{ .name }}
-app.kubernetes.io/instance: {{ .context.Release.Name }}
 {{- end }}

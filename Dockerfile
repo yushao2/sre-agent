@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.4
 
-# ============================================================================
-# Base stage - shared dependencies
-# ============================================================================
-FROM python:3.10-slim as base
+# =============================================================================
+# Base stage
+# =============================================================================
+FROM python:3.10-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -12,7 +12,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
@@ -21,77 +20,86 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.cargo/bin:$PATH"
 
-# ============================================================================
-# Builder stage - install dependencies
-# ============================================================================
-FROM base as builder
+# =============================================================================
+# Builder stage
+# =============================================================================
+FROM base AS builder
 
-# Copy project files
 COPY pyproject.toml ./
 COPY src ./src
 
-# Create virtual environment and install dependencies
 RUN uv venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN uv pip install -e ".[webhook]"
+RUN uv pip install .
 
-# ============================================================================
-# Agent runtime image
-# ============================================================================
-FROM base as agent
+# =============================================================================
+# API Server
+# =============================================================================
+FROM base AS api
 
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY src ./src
-COPY examples ./examples
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash agent
-USER agent
+RUN useradd --create-home appuser
+USER appuser
 
 EXPOSE 8000
 
-# Default command runs the HTTP server
 CMD ["python", "-m", "agent.server"]
 
-# ============================================================================
-# MCP Server base image
-# ============================================================================
-FROM base as mcp-base
+# =============================================================================
+# Celery Worker
+# =============================================================================
+FROM base AS worker
 
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY src ./src
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash mcp
-USER mcp
+RUN useradd --create-home appuser
+USER appuser
 
-# ============================================================================
-# Jira MCP Server
-# ============================================================================
-FROM mcp-base as mcp-jira
+CMD ["celery", "-A", "agent.tasks", "worker", "--loglevel=info", "-Q", "llm"]
 
-ENV MCP_SERVER_NAME=jira
+# =============================================================================
+# Celery Beat (Scheduler)
+# =============================================================================
+FROM base AS beat
 
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY src ./src
+
+RUN useradd --create-home appuser
+USER appuser
+
+CMD ["celery", "-A", "agent.tasks", "beat", "--loglevel=info"]
+
+# =============================================================================
+# MCP Servers (shared base)
+# =============================================================================
+FROM base AS mcp-base
+
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY src ./src
+
+RUN useradd --create-home appuser
+USER appuser
+
+# MCP Jira
+FROM mcp-base AS mcp-jira
 CMD ["python", "-m", "mcp_servers.jira.server"]
 
-# ============================================================================
-# Confluence MCP Server
-# ============================================================================
-FROM mcp-base as mcp-confluence
-
-ENV MCP_SERVER_NAME=confluence
-
+# MCP Confluence
+FROM mcp-base AS mcp-confluence
 CMD ["python", "-m", "mcp_servers.confluence.server"]
 
-# ============================================================================
-# GitLab MCP Server
-# ============================================================================
-FROM mcp-base as mcp-gitlab
-
-ENV MCP_SERVER_NAME=gitlab
-
+# MCP GitLab
+FROM mcp-base AS mcp-gitlab
 CMD ["python", "-m", "mcp_servers.gitlab.server"]

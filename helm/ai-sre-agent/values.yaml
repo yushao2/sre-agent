@@ -1,118 +1,134 @@
-# Default values for ai-sre-agent
-# This is a YAML-formatted file.
+# =============================================================================
+# AI SRE Agent - Helm Values
+# =============================================================================
+#
+# Deploys:
+#   - API Server (FastAPI)
+#   - Celery Workers (async task processing)
+#   - Celery Beat (optional scheduler)
+#   - MCP Servers (Jira, Confluence, GitLab)
+#   - Redis (via Bitnami subchart) OR external
+#   - PostgreSQL (via Bitnami subchart) OR external
+#
+# =============================================================================
 
-# =============================================================================
-# Global settings
-# =============================================================================
 global:
-  # Image registry prefix (e.g., "ghcr.io/yourorg" or "your-registry.com")
   imageRegistry: ""
-  # Image pull secrets
   imagePullSecrets: []
-  # Storage class for persistent volumes
   storageClass: ""
 
 # =============================================================================
-# Agent Configuration
+# API Server
 # =============================================================================
-agent:
+api:
   enabled: true
-  
-  replicaCount: 1
+  replicaCount: 2
   
   image:
     repository: ai-sre-agent
     tag: "latest"
     pullPolicy: IfNotPresent
   
-  # Resource limits
   resources:
     limits:
       cpu: "1"
-      memory: 2Gi
+      memory: 1Gi
     requests:
       cpu: 250m
-      memory: 512Mi
+      memory: 256Mi
   
-  # Service configuration
   service:
     type: ClusterIP
     port: 8000
   
-  # Ingress configuration
   ingress:
     enabled: false
     className: nginx
     annotations: {}
-      # kubernetes.io/tls-acme: "true"
     hosts:
       - host: sre-agent.example.com
         paths:
           - path: /
             pathType: Prefix
     tls: []
-    #  - secretName: sre-agent-tls
-    #    hosts:
-    #      - sre-agent.example.com
   
-  # Pod annotations
-  podAnnotations: {}
-  
-  # Pod security context
-  podSecurityContext:
-    runAsNonRoot: true
-    runAsUser: 1000
-    fsGroup: 1000
-  
-  # Container security context
-  securityContext:
-    allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: true
-    capabilities:
-      drop:
-        - ALL
-  
-  # Node selector
-  nodeSelector: {}
-  
-  # Tolerations
-  tolerations: []
-  
-  # Affinity rules
-  affinity: {}
-  
-  # Autoscaling
   autoscaling:
     enabled: false
-    minReplicas: 1
-    maxReplicas: 5
-    targetCPUUtilizationPercentage: 80
-    targetMemoryUtilizationPercentage: 80
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
   
-  # Persistent storage for RAG data
-  persistence:
-    enabled: true
-    size: 10Gi
-    accessMode: ReadWriteOnce
-    # storageClass: "" # Uses global.storageClass if not set
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
 # =============================================================================
-# MCP Servers Configuration
+# Celery Workers
+# =============================================================================
+worker:
+  enabled: true
+  replicaCount: 2
+  
+  image:
+    repository: ai-sre-agent
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  
+  # Celery settings
+  concurrency: 4
+  queues: "llm"
+  logLevel: "info"
+  
+  resources:
+    limits:
+      cpu: "2"
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 60
+  
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# =============================================================================
+# Celery Beat Scheduler
+# =============================================================================
+beat:
+  enabled: false
+  
+  image:
+    repository: ai-sre-agent
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# =============================================================================
+# MCP Servers
 # =============================================================================
 mcpServers:
-  # Jira MCP Server
   jira:
     enabled: true
-    replicaCount: 1
-    
+    replicaCount: 2
     image:
       repository: ai-sre-agent
       tag: "latest"
       pullPolicy: IfNotPresent
-    
-    # Override command for this specific server
-    command: ["python", "-m", "mcp_servers.jira.server"]
-    
     resources:
       limits:
         cpu: 500m
@@ -120,29 +136,16 @@ mcpServers:
       requests:
         cpu: 100m
         memory: 128Mi
-    
-    # Service for internal communication
     service:
-      type: ClusterIP
       port: 8080
-    
-    podAnnotations: {}
-    nodeSelector: {}
-    tolerations: []
-    affinity: {}
   
-  # Confluence MCP Server
   confluence:
     enabled: true
-    replicaCount: 1
-    
+    replicaCount: 2
     image:
       repository: ai-sre-agent
       tag: "latest"
       pullPolicy: IfNotPresent
-    
-    command: ["python", "-m", "mcp_servers.confluence.server"]
-    
     resources:
       limits:
         cpu: 500m
@@ -150,28 +153,16 @@ mcpServers:
       requests:
         cpu: 100m
         memory: 128Mi
-    
     service:
-      type: ClusterIP
       port: 8080
-    
-    podAnnotations: {}
-    nodeSelector: {}
-    tolerations: []
-    affinity: {}
   
-  # GitLab MCP Server
   gitlab:
     enabled: true
-    replicaCount: 1
-    
+    replicaCount: 2
     image:
       repository: ai-sre-agent
       tag: "latest"
       pullPolicy: IfNotPresent
-    
-    command: ["python", "-m", "mcp_servers.gitlab.server"]
-    
     resources:
       limits:
         cpu: 500m
@@ -179,75 +170,141 @@ mcpServers:
       requests:
         cpu: 100m
         memory: 128Mi
-    
     service:
-      type: ClusterIP
       port: 8080
-    
-    podAnnotations: {}
-    nodeSelector: {}
-    tolerations: []
-    affinity: {}
 
 # =============================================================================
-# Secrets Configuration
+# Redis (Bitnami Subchart)
+# =============================================================================
+redis:
+  # Set to true to deploy Redis via subchart
+  enabled: true
+  
+  # Architecture: standalone or replication
+  architecture: standalone
+  
+  auth:
+    enabled: true
+    password: ""  # Auto-generated if empty
+    existingSecret: ""
+    existingSecretPasswordKey: "redis-password"
+  
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+# External Redis (when redis.enabled=false)
+externalRedis:
+  host: ""
+  port: 6379
+  password: ""
+  existingSecret: ""
+  existingSecretPasswordKey: "redis-password"
+  # Full URL (overrides host/port)
+  # url: "redis://:password@host:6379/0"
+
+# =============================================================================
+# PostgreSQL (Bitnami Subchart)
+# =============================================================================
+postgresql:
+  # Set to true to deploy PostgreSQL via subchart
+  enabled: true
+  
+  auth:
+    username: sre_agent
+    password: ""  # Auto-generated if empty
+    database: sre_agent
+    existingSecret: ""
+  
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+
+# External PostgreSQL (when postgresql.enabled=false)
+externalPostgresql:
+  host: ""
+  port: 5432
+  username: sre_agent
+  password: ""
+  database: sre_agent
+  existingSecret: ""
+  existingSecretPasswordKey: "postgresql-password"
+  # Full URL (overrides individual settings)
+  # url: "postgresql://user:pass@host:5432/db"
+
+# =============================================================================
+# Secrets
 # =============================================================================
 secrets:
-  # Option 1: Create secrets from values (for testing only!)
-  # In production, use external secrets or sealed secrets
+  # Create secret from values (testing only - use existingSecret in production)
   create: false
   
-  # Anthropic API key
+  # Anthropic API
   anthropicApiKey: ""
   
-  # Jira credentials
+  # Jira
   jira:
     url: ""
     username: ""
     apiToken: ""
   
-  # Confluence credentials
+  # Confluence
   confluence:
     url: ""
     username: ""
     apiToken: ""
   
-  # GitLab credentials
+  # GitLab
   gitlab:
     url: "https://gitlab.com"
     token: ""
-
-  # Option 2: Use existing secret
+  
+  # Use existing secret (recommended)
   existingSecret: ""
-  # Keys in existing secret:
-  # - ANTHROPIC_API_KEY
-  # - JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN
-  # - CONFLUENCE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN
-  # - GITLAB_URL, GITLAB_TOKEN
+  # Expected keys:
+  #   ANTHROPIC_API_KEY
+  #   JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN
+  #   CONFLUENCE_URL, CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN
+  #   GITLAB_URL, GITLAB_TOKEN
 
 # =============================================================================
-# Service Account
+# Common Settings
 # =============================================================================
 serviceAccount:
   create: true
   name: ""
   annotations: {}
 
-# =============================================================================
-# Network Policies
-# =============================================================================
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
 networkPolicy:
   enabled: false
-  # Allow ingress from these namespaces
-  ingressNamespaces: []
-  # Allow egress to these CIDRs (for external APIs)
-  egressCIDRs:
-    - 0.0.0.0/0
 
-# =============================================================================
-# Pod Disruption Budget
-# =============================================================================
 podDisruptionBudget:
-  enabled: false
+  enabled: true
   minAvailable: 1
-  # maxUnavailable: 1

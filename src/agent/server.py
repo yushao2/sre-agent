@@ -1,43 +1,37 @@
 """
-HTTP Server for the AI SRE Agent.
+Production HTTP Server for the AI SRE Agent.
 
-Provides REST API endpoints for:
-- Incident summarization
-- Ticket triage
-- Root cause analysis
-- Webhook handlers for Jira, PagerDuty, etc.
+This is the main API server that:
+- Receives API requests and webhook events
+- Submits tasks to Celery for async processing
+- Provides health checks for Kubernetes
+- Implements rate limiting via Redis
+
+Architecture:
+    Client -> FastAPI Server -> Redis (queue) -> Celery Workers
+                                    |
+                            PostgreSQL (results)
 """
 
-import asyncio
 import json
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+import redis
+from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from .agent import SREAgentSimple
-from .rag import RAGEngine
-
 
 # =============================================================================
-# Models
+# Pydantic Models
 # =============================================================================
-
-class TaskType(str, Enum):
-    """Supported task types."""
-    SUMMARIZE = "summarize"
-    TRIAGE = "triage"
-    RCA = "rca"
-    CHAT = "chat"
-
 
 class TaskStatus(str, Enum):
-    """Task execution status."""
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -45,197 +39,208 @@ class TaskStatus(str, Enum):
 
 
 class IncidentData(BaseModel):
-    """Incident data for summarization."""
+    """Incident data for summarization or RCA."""
     key: str = Field(..., description="Incident key (e.g., INC-123)")
-    summary: str = Field(..., description="Incident summary/title")
-    description: Optional[str] = Field(None, description="Detailed description")
-    status: Optional[str] = Field(None, description="Current status")
-    priority: Optional[str] = Field(None, description="Priority level")
-    assignee: Optional[Dict[str, Any]] = Field(None, description="Assignee info")
-    reporter: Optional[Dict[str, Any]] = Field(None, description="Reporter info")
-    created: Optional[str] = Field(None, description="Creation timestamp")
-    updated: Optional[str] = Field(None, description="Last update timestamp")
-    labels: Optional[List[str]] = Field(default_factory=list, description="Labels")
-    components: Optional[List[str]] = Field(default_factory=list, description="Components")
-    comments: Optional[Dict[str, Any]] = Field(None, description="Comments data")
+    summary: str = Field(..., description="Incident title")
+    description: Optional[str] = Field(None, description="Full description")
+    status: Optional[str] = Field(None)
+    priority: Optional[str] = Field(None)
+    assignee: Optional[Dict[str, Any]] = Field(None)
+    created: Optional[str] = Field(None)
+    labels: Optional[List[str]] = Field(default_factory=list)
+    comments: Optional[Dict[str, Any]] = Field(None)
     linked_issues: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
 
 
 class TicketData(BaseModel):
     """Support ticket data for triage."""
-    key: str = Field(..., description="Ticket key")
-    summary: str = Field(..., description="Ticket summary")
-    description: Optional[str] = Field(None, description="Ticket description")
-    reporter: Optional[Dict[str, Any]] = Field(None, description="Reporter info")
-    created: Optional[str] = Field(None, description="Creation timestamp")
+    key: str
+    summary: str
+    description: Optional[str] = None
+    reporter: Optional[Dict[str, Any]] = None
     labels: Optional[List[str]] = Field(default_factory=list)
-    custom_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
-
-
-class ChatRequest(BaseModel):
-    """Free-form chat request."""
-    message: str = Field(..., description="User message")
-    context: Optional[Dict[str, Any]] = Field(None, description="Additional context")
-    conversation_id: Optional[str] = Field(None, description="Conversation ID for history")
 
 
 class SummarizeRequest(BaseModel):
-    """Request to summarize an incident."""
     incident: IncidentData
-    include_recommendations: bool = Field(True, description="Include prevention recommendations")
-    format: str = Field("markdown", description="Output format: markdown, json, or plain")
+    format: str = Field("markdown")
+    async_mode: bool = Field(True, description="Process via queue (recommended)")
 
 
 class TriageRequest(BaseModel):
-    """Request to triage a ticket."""
     ticket: TicketData
-    auto_respond: bool = Field(False, description="Generate auto-response suggestion")
-    auto_assign: bool = Field(False, description="Suggest team assignment")
+    async_mode: bool = Field(True)
 
 
 class RCARequest(BaseModel):
-    """Request for root cause analysis."""
     incident: IncidentData
-    code_changes: Optional[List[Dict[str, Any]]] = Field(None, description="Related code changes")
-    related_incidents: Optional[List[Dict[str, Any]]] = Field(None, description="Similar past incidents")
+    code_changes: Optional[List[Dict[str, Any]]] = None
+    related_incidents: Optional[List[Dict[str, Any]]] = None
+    async_mode: bool = Field(True)
+
+
+class ChatRequest(BaseModel):
+    message: str
+    context: Optional[Dict[str, Any]] = None
+    conversation_id: Optional[str] = None
+    async_mode: bool = Field(False, description="Chat is sync by default for UX")
 
 
 class TaskResponse(BaseModel):
-    """Response for async task submission."""
     task_id: str
     status: TaskStatus
     message: str
-
-
-class TaskResult(BaseModel):
-    """Result of a completed task."""
-    task_id: str
-    status: TaskStatus
-    task_type: TaskType
-    created_at: str
-    completed_at: Optional[str] = None
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-
-
-class SummarizeResponse(BaseModel):
-    """Response from summarization."""
-    incident_key: str
-    summary: str
-    timeline: Optional[List[Dict[str, str]]] = None
-    root_cause: Optional[str] = None
-    resolution: Optional[str] = None
-    recommendations: Optional[List[str]] = None
-    processed_at: str
-
-
-class TriageResponse(BaseModel):
-    """Response from triage."""
-    ticket_key: str
-    category: str
-    priority: str
-    suggested_team: Optional[str] = None
-    suggested_response: Optional[str] = None
-    needs_escalation: bool
-    confidence: float
-    reasoning: str
-    processed_at: str
+    result_url: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
-    """Health check response."""
     status: str
     version: str
-    tasks_pending: int
-    tasks_completed: int
+    dependencies: Dict[str, str]
+    queue_stats: Optional[Dict[str, Any]] = None
 
 
 # =============================================================================
-# Task Store (in-memory, replace with Redis/DB in production)
+# Dependencies and Helpers
 # =============================================================================
 
-class TaskStore:
-    """Simple in-memory task store."""
+_redis_client: Optional[redis.Redis] = None
+
+
+def get_redis() -> Optional[redis.Redis]:
+    """Get Redis client (lazy initialization)."""
+    global _redis_client
     
-    def __init__(self):
-        self.tasks: Dict[str, TaskResult] = {}
-        self._counter = 0
-        self._lock = asyncio.Lock()
+    if _redis_client is None:
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        try:
+            _redis_client = redis.from_url(redis_url, decode_responses=True)
+            _redis_client.ping()
+        except Exception:
+            _redis_client = None
     
-    async def create_task(self, task_type: TaskType) -> str:
-        async with self._lock:
-            self._counter += 1
-            task_id = f"{task_type.value}-{self._counter}-{int(datetime.utcnow().timestamp())}"
-            self.tasks[task_id] = TaskResult(
-                task_id=task_id,
-                status=TaskStatus.PENDING,
-                task_type=task_type,
-                created_at=datetime.utcnow().isoformat(),
-            )
-            return task_id
+    return _redis_client
+
+
+def get_celery():
+    """Import and return Celery app."""
+    from .tasks import celery
+    return celery
+
+
+class RateLimiter:
+    """Simple sliding window rate limiter using Redis."""
     
-    async def update_task(
-        self,
-        task_id: str,
-        status: TaskStatus,
-        result: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None,
-    ):
-        if task_id in self.tasks:
-            self.tasks[task_id].status = status
-            self.tasks[task_id].result = result
-            self.tasks[task_id].error = error
-            if status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
-                self.tasks[task_id].completed_at = datetime.utcnow().isoformat()
+    def __init__(self, redis_client: redis.Redis, rpm: int = 60):
+        self.redis = redis_client
+        self.rpm = rpm
     
-    def get_task(self, task_id: str) -> Optional[TaskResult]:
-        return self.tasks.get(task_id)
+    def check(self, client_id: str) -> tuple:
+        """Check if request is allowed. Returns (allowed, remaining)."""
+        if not self.redis:
+            return True, self.rpm
+        
+        key = f"ratelimit:{client_id}:{datetime.utcnow().minute}"
+        
+        try:
+            count = self.redis.incr(key)
+            if count == 1:
+                self.redis.expire(key, 60)
+            
+            remaining = max(0, self.rpm - count)
+            return count <= self.rpm, remaining
+        except Exception:
+            return True, self.rpm
+
+
+async def check_rate_limit(
+    request: Request,
+    x_api_key: Optional[str] = Header(None),
+):
+    """FastAPI dependency for rate limiting."""
+    redis_client = get_redis()
+    if not redis_client:
+        return
     
-    def get_stats(self) -> Dict[str, int]:
-        pending = sum(1 for t in self.tasks.values() if t.status == TaskStatus.PENDING)
-        completed = sum(1 for t in self.tasks.values() if t.status == TaskStatus.COMPLETED)
-        return {"pending": pending, "completed": completed}
+    client_id = x_api_key or request.client.host
+    limiter = RateLimiter(redis_client, rpm=60)
+    allowed, remaining = limiter.check(client_id)
+    
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": "60"},
+        )
+    
+    request.state.rate_limit_remaining = remaining
 
 
 # =============================================================================
-# Application
+# Application Lifespan
 # =============================================================================
-
-task_store = TaskStore()
-agent: Optional[SREAgentSimple] = None
-rag_engine: Optional[RAGEngine] = None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler."""
-    global agent, rag_engine
+    """Startup and shutdown logic."""
+    print("=" * 60)
+    print("Starting AI SRE Agent API Server")
+    print("=" * 60)
     
-    # Startup
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY environment variable not set")
+    # Check Anthropic API key
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        print("⚠️  WARNING: ANTHROPIC_API_KEY not set")
+    else:
+        print("✓ Anthropic API key configured")
     
-    model_name = os.getenv("MODEL_NAME", "claude-sonnet-4-20250514")
-    agent = SREAgentSimple(anthropic_api_key=api_key, model_name=model_name)
-    rag_engine = RAGEngine()
+    # Check Redis
+    redis_client = get_redis()
+    if redis_client:
+        print("✓ Redis connected")
+    else:
+        print("⚠️  WARNING: Redis not available")
     
-    print(f"AI SRE Agent server started with model: {model_name}")
+    # Check Database
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        try:
+            from .database import init_database
+            if init_database(database_url):
+                print("✓ PostgreSQL connected")
+            else:
+                print("⚠️  WARNING: PostgreSQL connection failed")
+        except Exception as e:
+            print(f"⚠️  WARNING: Database init error: {e}")
+    else:
+        print("ℹ️  PostgreSQL not configured (optional)")
+    
+    # Check Celery broker
+    try:
+        celery = get_celery()
+        print(f"✓ Celery broker: {celery.conf.broker_url}")
+    except Exception as e:
+        print(f"⚠️  WARNING: Celery error: {e}")
+    
+    print("=" * 60)
+    print("Server ready!")
+    print("=" * 60)
     
     yield
     
-    # Shutdown
-    print("AI SRE Agent server shutting down")
+    print("Shutting down...")
 
+
+# =============================================================================
+# FastAPI Application
+# =============================================================================
 
 app = FastAPI(
     title="AI SRE Agent API",
-    description="REST API for AI-powered incident management and support triage",
-    version="0.1.0",
+    description="Production API for AI-powered incident management",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
@@ -245,229 +250,254 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def add_headers(request: Request, call_next):
+    """Add rate limit headers to responses."""
+    response = await call_next(request)
+    if hasattr(request.state, "rate_limit_remaining"):
+        response.headers["X-RateLimit-Remaining"] = str(request.state.rate_limit_remaining)
+    return response
+
+
 # =============================================================================
-# Health & Info Endpoints
+# Health Endpoints
 # =============================================================================
 
+@app.get("/", include_in_schema=False)
+async def root():
+    return {"name": "AI SRE Agent", "version": "0.2.0", "docs": "/docs"}
+
+
 @app.get("/health", response_model=HealthResponse)
-async def health_check():
-    """Health check endpoint."""
-    stats = task_store.get_stats()
+async def health():
+    """Comprehensive health check."""
+    deps = {}
+    queue_stats = None
+    
+    # Redis
+    try:
+        r = get_redis()
+        deps["redis"] = "healthy" if r and r.ping() else "unavailable"
+    except Exception as e:
+        deps["redis"] = f"error: {e}"
+    
+    # PostgreSQL
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        try:
+            from sqlalchemy import text
+            from .database import get_db_session
+            with get_db_session() as db:
+                db.execute(text("SELECT 1"))
+            deps["postgresql"] = "healthy"
+        except Exception as e:
+            deps["postgresql"] = f"error: {e}"
+    else:
+        deps["postgresql"] = "not configured"
+    
+    # Celery workers
+    try:
+        celery = get_celery()
+        inspect = celery.control.inspect(timeout=2)
+        active = inspect.active()
+        if active:
+            deps["celery"] = "healthy"
+            queue_stats = {
+                "workers": len(active),
+                "active_tasks": sum(len(t) for t in active.values()),
+            }
+        else:
+            deps["celery"] = "no workers"
+    except Exception as e:
+        deps["celery"] = f"error: {e}"
+    
+    status = "healthy" if all("error" not in v for v in deps.values()) else "degraded"
+    
     return HealthResponse(
-        status="healthy",
-        version="0.1.0",
-        tasks_pending=stats["pending"],
-        tasks_completed=stats["completed"],
+        status=status,
+        version="0.2.0",
+        dependencies=deps,
+        queue_stats=queue_stats,
     )
 
 
-@app.get("/")
-async def root():
-    """Root endpoint with API info."""
-    return {
-        "name": "AI SRE Agent API",
-        "version": "0.1.0",
-        "endpoints": {
-            "health": "/health",
-            "summarize": "POST /api/v1/summarize",
-            "triage": "POST /api/v1/triage",
-            "rca": "POST /api/v1/rca",
-            "chat": "POST /api/v1/chat",
-            "webhooks": {
-                "jira": "POST /webhooks/jira",
-                "pagerduty": "POST /webhooks/pagerduty",
-            },
-        },
-    }
+@app.get("/health/live")
+async def liveness():
+    """Kubernetes liveness probe - is the process alive?"""
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+async def readiness():
+    """Kubernetes readiness probe - can we handle requests?"""
+    try:
+        celery = get_celery()
+        celery.connection().ensure_connection(max_retries=1)
+        return {"status": "ready"}
+    except Exception:
+        raise HTTPException(503, "Broker unavailable")
 
 
 # =============================================================================
-# Synchronous API Endpoints
+# API Endpoints
 # =============================================================================
 
-@app.post("/api/v1/summarize", response_model=SummarizeResponse)
-async def summarize_incident(request: SummarizeRequest):
+@app.post("/api/v1/summarize", response_model=TaskResponse)
+async def summarize_incident(
+    request: SummarizeRequest,
+    _: None = Depends(check_rate_limit),
+):
     """
-    Summarize an incident synchronously.
+    Summarize an incident.
     
-    Returns a structured summary including timeline, root cause, and recommendations.
+    By default, the task is processed asynchronously via Celery.
+    Poll `/api/v1/tasks/{task_id}` for results.
     """
-    if not agent:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
+    from .tasks import summarize_incident as task_fn
     
-    try:
-        # Convert to dict for agent
-        incident_data = request.incident.model_dump()
-        
-        # Get summary from agent
-        summary_text = await agent.summarize_incident_simple(incident_data)
-        
-        # Parse structured response (in production, use structured output)
-        return SummarizeResponse(
-            incident_key=request.incident.key,
-            summary=summary_text,
-            processed_at=datetime.utcnow().isoformat(),
+    data = request.incident.model_dump()
+    options = {"format": request.format}
+    
+    if request.async_mode:
+        task = task_fn.delay(data, options)
+        return TaskResponse(
+            task_id=task.id,
+            status=TaskStatus.PENDING,
+            message="Task queued",
+            result_url=f"/api/v1/tasks/{task.id}",
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    else:
+        # Synchronous (blocking) - use for testing only
+        result = task_fn.apply(args=[data, options]).get(timeout=120)
+        return TaskResponse(
+            task_id=result.get("task_id", "sync"),
+            status=TaskStatus.COMPLETED,
+            message="Completed",
+        )
 
 
-@app.post("/api/v1/triage", response_model=TriageResponse)
-async def triage_ticket(request: TriageRequest):
-    """
-    Triage a support ticket synchronously.
+@app.post("/api/v1/triage", response_model=TaskResponse)
+async def triage_ticket(
+    request: TriageRequest,
+    _: None = Depends(check_rate_limit),
+):
+    """Triage a support ticket."""
+    from .tasks import triage_ticket as task_fn
     
-    Returns category, priority, and suggested actions.
-    """
-    if not agent:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
+    data = request.ticket.model_dump()
     
-    try:
-        ticket_data = request.ticket.model_dump()
-        
-        # For now, use summarize as base (extend with proper triage logic)
-        # In production, you'd have a dedicated triage method
-        incident_like = {
-            "key": ticket_data["key"],
-            "summary": ticket_data["summary"],
-            "description": ticket_data.get("description", ""),
-            "comments": {"comments": [], "total": 0},
-        }
-        
-        result = await agent.summarize_incident_simple(incident_like)
-        
-        return TriageResponse(
-            ticket_key=request.ticket.key,
-            category="support",  # Would come from actual triage
-            priority="medium",
-            suggested_team="platform",
-            suggested_response=result[:500] if request.auto_respond else None,
-            needs_escalation=False,
-            confidence=0.8,
-            reasoning="Auto-triaged by AI SRE Agent",
-            processed_at=datetime.utcnow().isoformat(),
+    if request.async_mode:
+        task = task_fn.delay(data, {})
+        return TaskResponse(
+            task_id=task.id,
+            status=TaskStatus.PENDING,
+            message="Task queued",
+            result_url=f"/api/v1/tasks/{task.id}",
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    else:
+        result = task_fn.apply(args=[data, {}]).get(timeout=120)
+        return TaskResponse(
+            task_id=result.get("task_id", "sync"),
+            status=TaskStatus.COMPLETED,
+            message="Completed",
+        )
+
+
+@app.post("/api/v1/rca", response_model=TaskResponse)
+async def root_cause_analysis(
+    request: RCARequest,
+    _: None = Depends(check_rate_limit),
+):
+    """Perform root cause analysis on an incident."""
+    from .tasks import analyze_root_cause as task_fn
+    
+    data = request.incident.model_dump()
+    
+    if request.async_mode:
+        task = task_fn.delay(data, request.code_changes, request.related_incidents)
+        return TaskResponse(
+            task_id=task.id,
+            status=TaskStatus.PENDING,
+            message="Task queued",
+            result_url=f"/api/v1/tasks/{task.id}",
+        )
+    else:
+        result = task_fn.apply(
+            args=[data, request.code_changes, request.related_incidents]
+        ).get(timeout=180)
+        return TaskResponse(
+            task_id=result.get("task_id", "sync"),
+            status=TaskStatus.COMPLETED,
+            message="Completed",
+        )
 
 
 @app.post("/api/v1/chat")
-async def chat(request: ChatRequest):
-    """
-    Free-form chat with the agent.
-    
-    Useful for ad-hoc questions about incidents, runbooks, etc.
-    """
-    if not agent:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
-    
-    try:
-        from langchain_anthropic import ChatAnthropic
-        from langchain_core.messages import HumanMessage, SystemMessage
-        from .prompts import SRE_AGENT_SYSTEM_PROMPT
-        
-        # Build context if provided
-        context_str = ""
-        if request.context:
-            context_str = f"\n\nContext:\n{json.dumps(request.context, indent=2)}"
-        
-        llm = ChatAnthropic(
-            model=os.getenv("MODEL_NAME", "claude-sonnet-4-20250514"),
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
-        )
-        
-        response = await llm.ainvoke([
-            SystemMessage(content=SRE_AGENT_SYSTEM_PROMPT),
-            HumanMessage(content=f"{request.message}{context_str}"),
-        ])
-        
-        return {
-            "response": response.content,
-            "conversation_id": request.conversation_id,
-            "processed_at": datetime.utcnow().isoformat(),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/v1/rca")
-async def root_cause_analysis(request: RCARequest):
-    """
-    Perform root cause analysis on an incident.
-    """
-    if not agent:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
-    
-    try:
-        incident_data = request.incident.model_dump()
-        
-        # Enrich with code changes if provided
-        if request.code_changes:
-            incident_data["code_changes"] = request.code_changes
-        
-        result = await agent.summarize_incident_simple(incident_data)
-        
-        return {
-            "incident_key": request.incident.key,
-            "analysis": result,
-            "processed_at": datetime.utcnow().isoformat(),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# =============================================================================
-# Async Task Endpoints
-# =============================================================================
-
-@app.post("/api/v1/tasks/summarize", response_model=TaskResponse)
-async def submit_summarize_task(
-    request: SummarizeRequest,
-    background_tasks: BackgroundTasks,
+async def chat(
+    request: ChatRequest,
+    _: None = Depends(check_rate_limit),
 ):
-    """
-    Submit an incident summarization task for async processing.
+    """Free-form chat with the SRE agent."""
+    from .tasks import chat_completion as task_fn
     
-    Returns a task ID that can be polled for results.
-    """
-    task_id = await task_store.create_task(TaskType.SUMMARIZE)
-    background_tasks.add_task(process_summarize_task, task_id, request)
-    
-    return TaskResponse(
-        task_id=task_id,
-        status=TaskStatus.PENDING,
-        message="Task submitted successfully",
-    )
-
-
-async def process_summarize_task(task_id: str, request: SummarizeRequest):
-    """Background task processor for summarization."""
-    await task_store.update_task(task_id, TaskStatus.PROCESSING)
-    
-    try:
-        incident_data = request.incident.model_dump()
-        summary = await agent.summarize_incident_simple(incident_data)
-        
-        await task_store.update_task(
-            task_id,
-            TaskStatus.COMPLETED,
-            result={
-                "incident_key": request.incident.key,
-                "summary": summary,
-                "processed_at": datetime.utcnow().isoformat(),
-            },
+    if request.async_mode:
+        task = task_fn.delay(request.message, request.context, request.conversation_id)
+        return TaskResponse(
+            task_id=task.id,
+            status=TaskStatus.PENDING,
+            message="Task queued",
+            result_url=f"/api/v1/tasks/{task.id}",
         )
-    except Exception as e:
-        await task_store.update_task(task_id, TaskStatus.FAILED, error=str(e))
+    else:
+        result = task_fn.apply(
+            args=[request.message, request.context, request.conversation_id]
+        ).get(timeout=60)
+        return {
+            "response": result.get("response"),
+            "conversation_id": request.conversation_id,
+        }
 
 
-@app.get("/api/v1/tasks/{task_id}", response_model=TaskResult)
+# =============================================================================
+# Task Status Endpoint
+# =============================================================================
+
+@app.get("/api/v1/tasks/{task_id}")
 async def get_task_status(task_id: str):
-    """Get the status and result of a task."""
-    task = task_store.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    """
+    Get the status and result of an async task.
+    
+    Poll this endpoint until status is 'completed' or 'failed'.
+    """
+    from .tasks import celery
+    
+    result = celery.AsyncResult(task_id)
+    
+    if result.ready():
+        if result.successful():
+            return {
+                "task_id": task_id,
+                "status": "completed",
+                "result": result.result,
+            }
+        else:
+            return {
+                "task_id": task_id,
+                "status": "failed",
+                "error": str(result.result),
+            }
+    elif result.status == "PENDING":
+        return {"task_id": task_id, "status": "pending"}
+    else:
+        return {"task_id": task_id, "status": "processing"}
+
+
+@app.delete("/api/v1/tasks/{task_id}")
+async def cancel_task(task_id: str):
+    """Cancel a pending or running task."""
+    from .tasks import celery
+    celery.control.revoke(task_id, terminate=True)
+    return {"task_id": task_id, "status": "cancelled"}
 
 
 # =============================================================================
@@ -475,171 +505,187 @@ async def get_task_status(task_id: str):
 # =============================================================================
 
 @app.post("/webhooks/jira")
-async def jira_webhook(request: Request, background_tasks: BackgroundTasks):
+async def jira_webhook(
+    request: Request,
+    _: None = Depends(check_rate_limit),
+):
     """
     Handle Jira webhooks.
     
-    Configure in Jira: System > Webhooks > Create
-    Events: Issue Created, Issue Updated
+    Configure in Jira: Settings → System → Webhooks
+    Events: issue_created, issue_updated
     """
+    from .tasks import summarize_incident, triage_ticket
+    
     try:
         payload = await request.json()
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
     
-    event_type = payload.get("webhookEvent", "unknown")
+    webhook_id = str(uuid.uuid4())
+    event = payload.get("webhookEvent", "")
     issue = payload.get("issue", {})
     issue_key = issue.get("key", "UNKNOWN")
     
-    # Filter events
-    if event_type not in ["jira:issue_created", "jira:issue_updated"]:
-        return {"status": "ignored", "event": event_type}
+    # Log webhook
+    _log_webhook(webhook_id, "jira", payload, event)
     
-    # Check if it's an incident (customize based on your Jira setup)
-    issue_type = issue.get("fields", {}).get("issuetype", {}).get("name", "")
-    labels = issue.get("fields", {}).get("labels", [])
+    # Only process create/update
+    if event not in ["jira:issue_created", "jira:issue_updated"]:
+        return {"status": "ignored", "event": event}
     
+    # Build incident data
+    fields = issue.get("fields", {})
+    data = {
+        "key": issue_key,
+        "summary": fields.get("summary", ""),
+        "description": fields.get("description", ""),
+        "status": fields.get("status", {}).get("name"),
+        "priority": fields.get("priority", {}).get("name"),
+        "labels": fields.get("labels", []),
+        "comments": {"comments": [], "total": 0},
+    }
+    
+    # Route to appropriate task
     is_incident = (
-        issue_type.lower() == "incident" or
-        "incident" in labels or
-        issue_key.startswith("INC-")
+        fields.get("issuetype", {}).get("name", "").lower() == "incident"
+        or issue_key.startswith("INC-")
+        or "incident" in fields.get("labels", [])
     )
     
     if is_incident:
-        # Auto-summarize incidents
-        incident_data = IncidentData(
-            key=issue_key,
-            summary=issue.get("fields", {}).get("summary", ""),
-            description=issue.get("fields", {}).get("description", ""),
-            status=issue.get("fields", {}).get("status", {}).get("name"),
-            priority=issue.get("fields", {}).get("priority", {}).get("name"),
-            labels=labels,
-        )
-        
-        task_id = await task_store.create_task(TaskType.SUMMARIZE)
-        background_tasks.add_task(
-            process_summarize_task,
-            task_id,
-            SummarizeRequest(incident=incident_data),
-        )
-        
-        return {
-            "status": "processing",
-            "task_id": task_id,
-            "issue_key": issue_key,
-            "action": "summarize",
-        }
+        task = summarize_incident.delay(data, {})
+        action = "summarize"
     else:
-        # Triage other tickets
-        ticket_data = TicketData(
-            key=issue_key,
-            summary=issue.get("fields", {}).get("summary", ""),
-            description=issue.get("fields", {}).get("description", ""),
-            labels=labels,
-        )
-        
-        task_id = await task_store.create_task(TaskType.TRIAGE)
-        # Would add triage background task here
-        
-        return {
-            "status": "processing",
-            "task_id": task_id,
-            "issue_key": issue_key,
-            "action": "triage",
-        }
+        task = triage_ticket.delay(data, {})
+        action = "triage"
+    
+    _update_webhook(webhook_id, task.id)
+    
+    return {
+        "status": "queued",
+        "task_id": task.id,
+        "issue_key": issue_key,
+        "action": action,
+    }
 
 
 @app.post("/webhooks/pagerduty")
-async def pagerduty_webhook(request: Request, background_tasks: BackgroundTasks):
+async def pagerduty_webhook(
+    request: Request,
+    _: None = Depends(check_rate_limit),
+):
     """
     Handle PagerDuty webhooks.
     
-    Configure in PagerDuty: Integrations > Generic Webhooks (v3)
+    Configure in PagerDuty: Integrations → Generic Webhooks (v3)
     """
+    from .tasks import summarize_incident
+    
     try:
         payload = await request.json()
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
     
+    webhook_id = str(uuid.uuid4())
     event = payload.get("event", {})
-    event_type = event.get("event_type", "unknown")
+    event_type = event.get("event_type", "")
     
-    # Handle incident triggers
-    if event_type == "incident.triggered":
-        incident_data = event.get("data", {})
-        
-        incident = IncidentData(
-            key=incident_data.get("id", "PD-UNKNOWN"),
-            summary=incident_data.get("title", ""),
-            description=incident_data.get("description", ""),
-            status="triggered",
-            priority=incident_data.get("urgency", "high"),
-        )
-        
-        task_id = await task_store.create_task(TaskType.SUMMARIZE)
-        background_tasks.add_task(
-            process_summarize_task,
-            task_id,
-            SummarizeRequest(incident=incident),
-        )
-        
-        return {
-            "status": "processing",
-            "task_id": task_id,
-            "incident_id": incident.key,
-        }
+    _log_webhook(webhook_id, "pagerduty", payload, event_type)
     
-    return {"status": "ignored", "event_type": event_type}
+    if event_type != "incident.triggered":
+        return {"status": "ignored", "event_type": event_type}
+    
+    incident = event.get("data", {})
+    data = {
+        "key": incident.get("id", f"PD-{webhook_id[:8]}"),
+        "summary": incident.get("title", ""),
+        "description": incident.get("description", ""),
+        "status": "triggered",
+        "priority": incident.get("urgency", "high"),
+        "comments": {"comments": [], "total": 0},
+    }
+    
+    task = summarize_incident.delay(data, {})
+    _update_webhook(webhook_id, task.id)
+    
+    return {"status": "queued", "task_id": task.id}
 
 
 @app.post("/webhooks/generic")
-async def generic_webhook(request: Request, background_tasks: BackgroundTasks):
+async def generic_webhook(
+    request: Request,
+    _: None = Depends(check_rate_limit),
+):
     """
-    Generic webhook handler for custom integrations.
+    Generic webhook for custom integrations.
     
-    Expects a JSON body with:
-    - action: "summarize" | "triage" | "rca" | "chat"
-    - data: The relevant data for the action
+    Payload format:
+    {
+        "action": "summarize" | "triage" | "rca" | "chat",
+        "data": { ... }
+    }
     """
+    from .tasks import summarize_incident, triage_ticket, analyze_root_cause, chat_completion
+    
     try:
         payload = await request.json()
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
     
-    action = payload.get("action", "chat")
+    action = payload.get("action", "")
     data = payload.get("data", {})
     
-    if action == "summarize":
-        incident = IncidentData(**data)
-        task_id = await task_store.create_task(TaskType.SUMMARIZE)
-        background_tasks.add_task(
-            process_summarize_task,
-            task_id,
-            SummarizeRequest(incident=incident),
-        )
-        return {"status": "processing", "task_id": task_id}
+    webhook_id = str(uuid.uuid4())
+    _log_webhook(webhook_id, "generic", payload, action)
     
-    elif action == "chat":
-        message = data.get("message", "")
-        if not message:
-            raise HTTPException(status_code=400, detail="Message required for chat")
-        
-        # Sync chat for generic webhook
-        result = await chat(ChatRequest(message=message, context=data.get("context")))
-        return result
+    task_map = {
+        "summarize": lambda: summarize_incident.delay(data, {}),
+        "triage": lambda: triage_ticket.delay(data, {}),
+        "rca": lambda: analyze_root_cause.delay(data, None, None),
+        "chat": lambda: chat_completion.delay(data.get("message", ""), data.get("context")),
+    }
     
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
+    if action not in task_map:
+        raise HTTPException(400, f"Unknown action: {action}")
+    
+    task = task_map[action]()
+    _update_webhook(webhook_id, task.id)
+    
+    return {"status": "queued", "task_id": task.id, "action": action}
 
 
 # =============================================================================
-# Entry point
+# Webhook Helpers
 # =============================================================================
 
-def create_app() -> FastAPI:
-    """Create the FastAPI application."""
-    return app
+def _log_webhook(webhook_id: str, source: str, payload: dict, event: str):
+    """Log webhook to database."""
+    if not os.getenv("DATABASE_URL"):
+        return
+    try:
+        from .database import get_db_session, WebhookLogRepository
+        with get_db_session() as db:
+            WebhookLogRepository(db).create(webhook_id, source, json.dumps(payload), event)
+    except Exception:
+        pass
 
+
+def _update_webhook(webhook_id: str, task_id: str):
+    """Update webhook with task ID."""
+    if not os.getenv("DATABASE_URL"):
+        return
+    try:
+        from .database import get_db_session, WebhookLogRepository
+        with get_db_session() as db:
+            WebhookLogRepository(db).update_processed(webhook_id, task_id, "queued")
+    except Exception:
+        pass
+
+
+# =============================================================================
+# Entry Point
+# =============================================================================
 
 if __name__ == "__main__":
     import uvicorn
@@ -647,5 +693,5 @@ if __name__ == "__main__":
         "agent.server:app",
         host=os.getenv("HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "8000")),
-        reload=os.getenv("DEBUG", "false").lower() == "true",
+        reload=os.getenv("DEBUG", "").lower() == "true",
     )

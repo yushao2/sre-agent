@@ -1,0 +1,200 @@
+{{- if .Values.mcpServers.jira.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-sre-agent.fullname" . }}-mcp-jira
+  labels:
+    {{- include "ai-sre-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-jira
+spec:
+  replicas: {{ .Values.mcpServers.jira.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-sre-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mcp-jira
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sre-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mcp-jira
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "ai-sre-agent.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: mcp-jira
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: {{ include "ai-sre-agent.image" (dict "image" .Values.mcpServers.jira.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.mcpServers.jira.image.pullPolicy }}
+          command: ["python", "-m", "mcp_servers.jira.server"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: {{ include "ai-sre-agent.secretName" . }}
+          resources:
+            {{- toYaml .Values.mcpServers.jira.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-sre-agent.fullname" . }}-mcp-jira
+  labels:
+    {{- include "ai-sre-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-jira
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.mcpServers.jira.service.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "ai-sre-agent.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-jira
+{{- end }}
+---
+{{- if .Values.mcpServers.confluence.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-sre-agent.fullname" . }}-mcp-confluence
+  labels:
+    {{- include "ai-sre-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-confluence
+spec:
+  replicas: {{ .Values.mcpServers.confluence.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-sre-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mcp-confluence
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sre-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mcp-confluence
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "ai-sre-agent.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: mcp-confluence
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: {{ include "ai-sre-agent.image" (dict "image" .Values.mcpServers.confluence.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.mcpServers.confluence.image.pullPolicy }}
+          command: ["python", "-m", "mcp_servers.confluence.server"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: {{ include "ai-sre-agent.secretName" . }}
+          resources:
+            {{- toYaml .Values.mcpServers.confluence.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-sre-agent.fullname" . }}-mcp-confluence
+  labels:
+    {{- include "ai-sre-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-confluence
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.mcpServers.confluence.service.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "ai-sre-agent.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-confluence
+{{- end }}
+---
+{{- if .Values.mcpServers.gitlab.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-sre-agent.fullname" . }}-mcp-gitlab
+  labels:
+    {{- include "ai-sre-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-gitlab
+spec:
+  replicas: {{ .Values.mcpServers.gitlab.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-sre-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mcp-gitlab
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sre-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mcp-gitlab
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "ai-sre-agent.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: mcp-gitlab
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: {{ include "ai-sre-agent.image" (dict "image" .Values.mcpServers.gitlab.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.mcpServers.gitlab.image.pullPolicy }}
+          command: ["python", "-m", "mcp_servers.gitlab.server"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: {{ include "ai-sre-agent.secretName" . }}
+          resources:
+            {{- toYaml .Values.mcpServers.gitlab.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-sre-agent.fullname" . }}-mcp-gitlab
+  labels:
+    {{- include "ai-sre-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-gitlab
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.mcpServers.gitlab.service.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "ai-sre-agent.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp-gitlab
+{{- end }}

@@ -1,0 +1,137 @@
+version: "3.8"
+
+services:
+  # ===========================================================================
+  # API Server
+  # ===========================================================================
+  api:
+    build:
+      context: .
+      target: api
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://sre_agent:sre_agent@postgres:5432/sre_agent
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Celery Workers
+  # ===========================================================================
+  worker:
+    build:
+      context: .
+      target: worker
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://sre_agent:sre_agent@postgres:5432/sre_agent
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CELERY_CONCURRENCY=4
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Celery Beat (Scheduler)
+  # ===========================================================================
+  beat:
+    build:
+      context: .
+      target: beat
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://sre_agent:sre_agent@postgres:5432/sre_agent
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ===========================================================================
+  # MCP Servers
+  # ===========================================================================
+  mcp-jira:
+    build:
+      context: .
+      target: mcp-jira
+    environment:
+      - JIRA_URL=${JIRA_URL}
+      - JIRA_USERNAME=${JIRA_USERNAME}
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+    restart: unless-stopped
+
+  mcp-confluence:
+    build:
+      context: .
+      target: mcp-confluence
+    environment:
+      - CONFLUENCE_URL=${CONFLUENCE_URL}
+      - CONFLUENCE_USERNAME=${CONFLUENCE_USERNAME}
+      - CONFLUENCE_API_TOKEN=${CONFLUENCE_API_TOKEN}
+    restart: unless-stopped
+
+  mcp-gitlab:
+    build:
+      context: .
+      target: mcp-gitlab
+    environment:
+      - GITLAB_URL=${GITLAB_URL:-https://gitlab.com}
+      - GITLAB_TOKEN=${GITLAB_TOKEN}
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Infrastructure
+  # ===========================================================================
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=sre_agent
+      - POSTGRES_PASSWORD=sre_agent
+      - POSTGRES_DB=sre_agent
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sre_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  postgres-data:

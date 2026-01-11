@@ -1,0 +1,106 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-sre-agent.fullname" . }}-worker
+  labels:
+    {{- include "ai-sre-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  {{- if not .Values.worker.autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "ai-sre-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      {{- with .Values.worker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "ai-sre-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "ai-sre-agent.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: worker
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: {{ include "ai-sre-agent.image" (dict "image" .Values.worker.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          command:
+            - celery
+            - "-A"
+            - agent.tasks
+            - worker
+            - "--loglevel={{ .Values.worker.logLevel }}"
+            - "--concurrency={{ .Values.worker.concurrency }}"
+            - "-Q"
+            - "{{ .Values.worker.queues }}"
+          envFrom:
+            - configMapRef:
+                name: {{ include "ai-sre-agent.fullname" . }}-config
+            - secretRef:
+                name: {{ include "ai-sre-agent.secretName" . }}
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.redis.enabled }}
+                  name: {{ include "ai-sre-agent.fullname" . }}-redis
+                  key: redis-password
+                  {{- else }}
+                  name: {{ .Values.externalRedis.existingSecret | default (printf "%s-external-redis" (include "ai-sre-agent.fullname" .)) }}
+                  key: {{ .Values.externalRedis.existingSecretPasswordKey | default "redis-password" }}
+                  {{- end }}
+            - name: REDIS_URL
+              value: {{ include "ai-sre-agent.redisUrl" . | quote }}
+            - name: CELERY_BROKER_URL
+              value: {{ include "ai-sre-agent.redisUrl" . | quote }}
+            - name: CELERY_RESULT_BACKEND
+              value: {{ include "ai-sre-agent.redisUrl" . | quote }}
+            {{- if or .Values.postgresql.enabled .Values.externalPostgresql.host }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.postgresql.enabled }}
+                  name: {{ include "ai-sre-agent.fullname" . }}-postgresql
+                  key: password
+                  {{- else }}
+                  name: {{ .Values.externalPostgresql.existingSecret | default (printf "%s-external-postgresql" (include "ai-sre-agent.fullname" .)) }}
+                  key: {{ .Values.externalPostgresql.existingSecretPasswordKey | default "postgresql-password" }}
+                  {{- end }}
+            - name: DATABASE_URL
+              value: {{ include "ai-sre-agent.postgresqlUrl" . | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

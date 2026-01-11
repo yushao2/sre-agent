@@ -1,0 +1,66 @@
+{{- if .Values.beat.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-sre-agent.fullname" . }}-beat
+  labels:
+    {{- include "ai-sre-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beat
+spec:
+  replicas: 1  # Beat should only have 1 replica
+  selector:
+    matchLabels:
+      {{- include "ai-sre-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: beat
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "ai-sre-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: beat
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "ai-sre-agent.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: beat
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: {{ include "ai-sre-agent.image" (dict "image" .Values.beat.image "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.beat.image.pullPolicy }}
+          command:
+            - celery
+            - "-A"
+            - agent.tasks
+            - beat
+            - "--loglevel=info"
+          envFrom:
+            - configMapRef:
+                name: {{ include "ai-sre-agent.fullname" . }}-config
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.redis.enabled }}
+                  name: {{ include "ai-sre-agent.fullname" . }}-redis
+                  key: redis-password
+                  {{- else }}
+                  name: {{ .Values.externalRedis.existingSecret | default (printf "%s-external-redis" (include "ai-sre-agent.fullname" .)) }}
+                  key: {{ .Values.externalRedis.existingSecretPasswordKey | default "redis-password" }}
+                  {{- end }}
+            - name: CELERY_BROKER_URL
+              value: {{ include "ai-sre-agent.redisUrl" . | quote }}
+          resources:
+            {{- toYaml .Values.beat.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

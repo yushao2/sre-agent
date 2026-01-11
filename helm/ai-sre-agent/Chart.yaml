@@ -2,17 +2,29 @@ apiVersion: v2
 name: ai-sre-agent
 description: AI-powered SRE agent for incident management and support triage
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
+
 keywords:
   - ai
   - sre
-  - mcp
   - incident-management
-  - langchain
+  - celery
+
 maintainers:
   - name: Your Name
     email: you@example.com
-home: https://github.com/yourorg/ai-sre-agent
-sources:
-  - https://github.com/yourorg/ai-sre-agent
+
+# Subchart dependencies
+dependencies:
+  # Redis - Celery broker and caching
+  - name: redis
+    version: "18.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+  
+  # PostgreSQL - Task results and logging
+  - name: postgresql
+    version: "13.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
