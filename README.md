@@ -1,6 +1,133 @@
 # AI SRE Agent
 
-Production-ready AI agent for incident management and support triage.
+Production-ready AI agent for incident management and support triage, powered by Claude.
+
+## Features
+
+- **Incident Summarization**: Generate structured summaries with timeline, root cause, and recommendations
+- **Ticket Triage**: Categorize and prioritize support tickets automatically
+- **Root Cause Analysis**: Deep-dive analysis with contributing factors and fixes
+- **Interactive Chat**: Ask SRE-related questions and get expert guidance
+
+## Installation
+
+### Minimal (Local Development)
+
+```bash
+# Install with minimal dependencies (just LangChain + Anthropic)
+pip install -e .
+
+# Set your API key
+export ANTHROPIC_API_KEY=your-key
+
+# Run the demo
+python -m agent.local demo
+```
+
+### Full Installation (Production)
+
+```bash
+# Install all dependencies
+pip install -e ".[all]"
+
+# Or install specific extras
+pip install -e ".[server]"      # FastAPI server
+pip install -e ".[celery]"      # Celery + Redis
+pip install -e ".[database]"    # PostgreSQL support
+pip install -e ".[mcp]"         # MCP integrations
+```
+
+## Quick Start
+
+### Interactive Mode
+
+```bash
+python -m agent.local interactive
+```
+
+### CLI Commands
+
+```bash
+# Chat with the agent
+python -m agent.local chat "What causes connection pool exhaustion?"
+
+# Summarize an incident
+python -m agent.local summarize \
+  --key INC-123 \
+  --summary "Database connection timeout" \
+  --description "Users seeing 504 errors..."
+
+# Triage a ticket
+python -m agent.local triage \
+  --key TICKET-456 \
+  --summary "Cannot login" \
+  --description "Getting 500 error on login page"
+
+# Load from JSON file
+python -m agent.local summarize --file examples/sample_incident.json
+
+# Run demo with sample data
+python -m agent.local demo
+```
+
+### Python Library
+
+```python
+from agent import run_summarize, run_triage, run_chat
+
+# Chat with the agent
+response = run_chat("What should I check during a memory leak?")
+print(response)
+
+# Summarize an incident
+summary = run_summarize({
+    "key": "INC-123",
+    "summary": "API latency spike",
+    "description": "p99 went from 100ms to 5s...",
+    "status": "Resolved",
+    "priority": "High",
+})
+print(summary)
+
+# Triage a ticket
+result = run_triage({
+    "key": "TICKET-789",
+    "summary": "Export not working",
+    "description": "PDF export button does nothing...",
+})
+print(result)
+```
+
+### Async Usage
+
+```python
+import asyncio
+from agent import SREAgentSimple
+
+async def main():
+    agent = SREAgentSimple()
+    
+    # Summarize with full control
+    result = await agent.summarize_incident_simple({
+        "key": "INC-123",
+        "summary": "High memory usage",
+        "description": "Service OOMKilled repeatedly",
+        "comments": {
+            "comments": [
+                {"author": "oncall", "body": "Investigating...", "created": "2024-01-15T10:00:00Z"}
+            ]
+        }
+    })
+    print(result)
+
+asyncio.run(main())
+```
+
+---
+
+## Production Deployment
+
+For production with async processing, webhooks, and horizontal scaling:
 
 ## Architecture
 
@@ -25,90 +152,51 @@ Production-ready AI agent for incident management and support triage.
 │                      │         Anthropic Claude API        │           │
 │                      └─────────────────────────────────────┘           │
 │                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                        MCP Servers                               │   │
-│  │  ┌───────────┐    ┌───────────────┐    ┌─────────────┐          │   │
-│  │  │   Jira    │    │  Confluence   │    │   GitLab    │          │   │
-│  │  └───────────┘    └───────────────┘    └─────────────┘          │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
 │  ┌─────────────────┐                                                   │
 │  │   PostgreSQL    │  (Task results, webhook logs)                     │
 │  └─────────────────┘                                                   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Features
-
-- **Async Task Processing**: Celery workers handle LLM calls without blocking
-- **Horizontal Scaling**: Add workers to handle more concurrent requests
-- **Rate Limiting**: Redis-based rate limiting per client
-- **Webhook Support**: Jira, PagerDuty, and generic webhook handlers
-- **Health Checks**: Kubernetes-ready liveness and readiness probes
-- **Task Persistence**: PostgreSQL storage for results and audit logs
-
-## Quick Start
-
-### Local Development
-
-```bash
-# Install dependencies
-uv venv && source .venv/bin/activate
-uv pip install -e .
-
-# Start infrastructure
-docker-compose up -d redis postgres
-
-# Set environment
-export ANTHROPIC_API_KEY=your-key
-export REDIS_URL=redis://localhost:6379/0
-export DATABASE_URL=postgresql://sre_agent:sre_agent@localhost:5432/sre_agent
-
-# Start API server
-sre-agent serve
-
-# Start worker (in another terminal)
-sre-agent worker --concurrency 4
-```
-
 ### Docker Compose
 
 ```bash
-# Set your API key
 export ANTHROPIC_API_KEY=your-key
-
-# Start everything
 docker-compose up -d
-
-# Check logs
-docker-compose logs -f api worker
 ```
 
 ### Kubernetes (Helm)
 
 ```bash
-# Add Bitnami repo for Redis/PostgreSQL
+# Add Bitnami repo
 helm repo add bitnami https://charts.bitnami.com/bitnami
 
 # Update dependencies
-cd helm/ai-sre-agent
-helm dependency update
+cd helm/ai-sre-agent && helm dependency update
 
 # Create secret
 kubectl create secret generic ai-sre-agent-secrets \
-  --from-literal=ANTHROPIC_API_KEY=your-key \
-  --from-literal=JIRA_URL=https://your.atlassian.net \
-  --from-literal=JIRA_USERNAME=email@example.com \
-  --from-literal=JIRA_API_TOKEN=your-token
+  --from-literal=ANTHROPIC_API_KEY=your-key
 
 # Install
 helm install ai-sre-agent ./helm/ai-sre-agent \
   --set secrets.existingSecret=ai-sre-agent-secrets
 ```
 
-## API Usage
+## API Endpoints
 
-### Submit an Incident for Summarization
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/summarize` | POST | Summarize an incident |
+| `/api/v1/triage` | POST | Triage a ticket |
+| `/api/v1/rca` | POST | Root cause analysis |
+| `/api/v1/chat` | POST | Chat with agent |
+| `/api/v1/tasks/{id}` | GET | Get task status/result |
+| `/webhooks/jira` | POST | Jira webhook handler |
+| `/webhooks/pagerduty` | POST | PagerDuty webhook handler |
+| `/health` | GET | Health check |
+
+### Example: Submit Incident
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/summarize \
@@ -118,130 +206,55 @@ curl -X POST http://localhost:8000/api/v1/summarize \
       "key": "INC-123",
       "summary": "Database connection pool exhausted",
       "description": "Users experiencing timeouts",
-      "priority": "critical",
-      "comments": {
-        "comments": [
-          {"author": "oncall", "body": "Investigating connection leak"}
-        ]
-      }
+      "priority": "critical"
     }
   }'
 
-# Response:
-# {"task_id": "abc-123", "status": "pending", "result_url": "/api/v1/tasks/abc-123"}
+# Response: {"task_id": "abc-123", "status": "pending", "result_url": "/api/v1/tasks/abc-123"}
 ```
 
-### Poll for Results
+### Example: Poll for Result
 
 ```bash
 curl http://localhost:8000/api/v1/tasks/abc-123
 
-# Response (when complete):
-# {"task_id": "abc-123", "status": "completed", "result": {"summary": "..."}}
-```
-
-### Synchronous Mode (Testing Only)
-
-```bash
-curl -X POST http://localhost:8000/api/v1/summarize \
-  -H "Content-Type: application/json" \
-  -d '{
-    "incident": {...},
-    "async_mode": false
-  }'
+# Response: {"task_id": "abc-123", "status": "completed", "result": {"summary": "..."}}
 ```
 
 ## Configuration
 
-### Environment Variables
-
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | Yes | - | Anthropic API key |
-| `REDIS_URL` | Yes | `redis://localhost:6379/0` | Redis connection URL |
-| `DATABASE_URL` | No | - | PostgreSQL URL for persistence |
-| `CELERY_CONCURRENCY` | No | `4` | Workers per Celery process |
-| `MODEL_NAME` | No | `claude-sonnet-4-20250514` | Claude model to use |
+| `MODEL_NAME` | No | `claude-sonnet-4-20250514` | Claude model |
+| `REDIS_URL` | No* | `redis://localhost:6379/0` | Redis URL (*required for server) |
+| `DATABASE_URL` | No | - | PostgreSQL URL |
+| `CELERY_CONCURRENCY` | No | `4` | Worker concurrency |
 
-### Helm Values
+## Project Structure
 
-```yaml
-# Use external Redis instead of subchart
-redis:
-  enabled: false
-externalRedis:
-  host: my-redis.example.com
-  port: 6379
-  existingSecret: my-redis-secret
-
-# Use external PostgreSQL
-postgresql:
-  enabled: false
-externalPostgresql:
-  host: my-postgres.example.com
-  port: 5432
-  database: sre_agent
-  existingSecret: my-postgres-secret
-
-# Scale workers
-worker:
-  replicaCount: 5
-  concurrency: 8
-  autoscaling:
-    enabled: true
-    minReplicas: 2
-    maxReplicas: 20
 ```
-
-## Scaling Guide
-
-### API Servers
-- Stateless, scale horizontally
-- 2+ replicas recommended for HA
-- Use HPA based on CPU
-
-### Celery Workers
-- Each worker handles 1 LLM call at a time (prefetch=1)
-- Scale based on queue depth
-- `concurrency=4` means 4 concurrent tasks per pod
-- For 100 concurrent requests: ~25 worker pods with concurrency=4
-
-### Redis
-- Standalone mode sufficient for most cases
-- Enable replication for HA
-- Monitor memory usage (task results stored here)
-
-### PostgreSQL
-- Optional but recommended for production
-- Stores task results and webhook logs
-- Enable for audit trail and debugging
-
-## Monitoring
-
-### Health Endpoints
-
-- `GET /health` - Full dependency check
-- `GET /health/live` - Liveness probe (is process running?)
-- `GET /health/ready` - Readiness probe (can handle requests?)
-
-### Celery Monitoring
-
-```bash
-# Active tasks
-celery -A agent.tasks inspect active
-
-# Queue length
-celery -A agent.tasks inspect reserved
-
-# Worker stats
-celery -A agent.tasks inspect stats
+ai-sre-agent/
+├── src/agent/
+│   ├── agent.py          # Core SREAgentSimple class
+│   ├── prompts.py        # System prompts and formatters
+│   ├── local.py          # CLI and sync wrappers
+│   ├── server.py         # FastAPI production server
+│   ├── tasks.py          # Celery task definitions
+│   └── database.py       # SQLAlchemy models
+├── examples/
+│   ├── simple_usage.py   # Python usage examples
+│   └── sample_incident.json
+├── helm/ai-sre-agent/    # Kubernetes Helm chart
+├── docker-compose.yml    # Local development stack
+└── Dockerfile            # Multi-stage build
 ```
 
 ## Development
 
 ```bash
 # Install dev dependencies
-uv pip install -e ".[dev]"
+pip install -e ".[dev]"
 
 # Run tests
 pytest
@@ -249,7 +262,7 @@ pytest
 # Lint
 ruff check src
 
-# Type check
+# Type check  
 mypy src
 ```
 

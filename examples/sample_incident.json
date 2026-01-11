@@ -1,0 +1,28 @@
+{
+  "key": "INC-2024-001",
+  "summary": "Payment processing service returning 503 errors",
+  "description": "## Summary\nPayment service is returning 503 Service Unavailable errors for approximately 15% of requests.\n\n## Impact\n- Customers unable to complete purchases\n- Estimated revenue impact: $50k/hour\n- Affecting all regions\n\n## Timeline\n- 14:00 UTC - First alerts triggered\n- 14:05 UTC - On-call paged\n- 14:15 UTC - Identified memory pressure on payment-api pods\n- 14:20 UTC - Scaled up replica count from 3 to 6\n- 14:25 UTC - Error rate dropping\n- 14:30 UTC - Fully recovered\n\n## Root Cause\nMemory leak in payment validation library v2.3.1 introduced in yesterday's deploy.",
+  "status": "Resolved",
+  "priority": "Critical",
+  "labels": ["payments", "p1", "memory-leak"],
+  "comments": {
+    "comments": [
+      {
+        "author": "oncall@company.com",
+        "body": "Seeing OOMKilled events on payment-api pods. Investigating.",
+        "created": "2024-01-20T14:12:00Z"
+      },
+      {
+        "author": "oncall@company.com",
+        "body": "Memory usage growing linearly over time. Looks like a leak. Scaling up as temporary fix.",
+        "created": "2024-01-20T14:18:00Z"
+      },
+      {
+        "author": "payments-team@company.com",
+        "body": "Confirmed leak in validation lib. Rolling back to v2.3.0.",
+        "created": "2024-01-20T14:35:00Z"
+      }
+    ],
+    "total": 3
+  }
+}
